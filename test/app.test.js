@@ -42,7 +42,8 @@ function fakeFetch(url, opts = {}) {
 let server, base;
 before(async () => {
   const db = new Database(":memory:");
-  server = createApp({ db, deps: { fetch: fakeFetch } }).listen(0);
+  const mailer = { enabled: true, send: async () => ({ ok: true }) };
+  server = createApp({ db, deps: { fetch: fakeFetch, mailer } }).listen(0);
   await new Promise((r) => server.once("listening", r));
   base = `http://localhost:${server.address().port}`;
 });

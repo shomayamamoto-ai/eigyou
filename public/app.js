@@ -764,7 +764,10 @@ const ADMIN_RENDER = {
 
     const showLink = (r, note) => {
       const url = `${location.origin}${r.link}`;
-      $("#inv-link").innerHTML = `<p class="notice" style="margin-top:12px">${esc(note)}<br />このリンクを本人にだけ送ってください。</p>
+      const how = r.emailed
+        ? "本人宛てにメールを送信しました。<br />届かない場合は、下のリンクを本人にだけ伝えてください。"
+        : "メール送信が設定されていないため、下のリンクを本人にだけ伝えてください。";
+      $("#inv-link").innerHTML = `<p class="notice" style="margin-top:12px">${esc(note)}<br />${how}</p>
         <div class="link-box"><input readonly value="${esc(url)}" id="link-text" /><button class="btn small primary" id="link-copy">コピー</button></div>`;
       $("#link-copy").addEventListener("click", async () => {
         try { await navigator.clipboard.writeText(url); toast("コピーしました"); } catch { $("#link-text").select(); }
@@ -830,8 +833,9 @@ const ADMIN_RENDER = {
             <td><b>${esc(p.label)}</b></td><td>${p.priceYen === null ? "要相談" : yen(p.priceYen)}</td>
             <td>${p.aiPerMonth ?? "上限なし"}${p.aiPerMonth ? "回" : ""}</td><td>${p.users ?? "上限なし"}${p.users ? "人" : ""}</td></tr>`).join("")}</tbody>
         </table></div>
-        <p class="muted" style="margin:8px 0 0">プランの変更は、サービスの運営者にお問い合わせください。</p>
+        ${billingHtml(u)}
       </section>`;
+    bindBilling(body);
   },
 
   async audit(body) {
@@ -873,6 +877,45 @@ const ADMIN_RENDER = {
   },
 };
 
+// ---------- 決済(申し込み・お支払い管理) ----------
+function billingHtml(u) {
+  if (u.plan.key === "internal") return `<p class="muted" style="margin:8px 0 0">社内利用プランのため、お支払いは不要です。</p>`;
+  const contact = u.contactEmail
+    ? `<a href="mailto:${esc(u.contactEmail)}">${esc(u.contactEmail)}</a>`
+    : "サービスの運営者";
+  if (!u.billing.enabled) return `<p class="muted" style="margin:8px 0 0">プランの変更は、${contact} までお問い合わせください。</p>`;
+  if (!isOwner()) return `<p class="muted" style="margin:8px 0 0">お申し込み・お支払いの管理は、オーナーのみが行えます。</p>`;
+  const statusChip = {
+    active: `<span class="chip ok">お支払い済み</span>`,
+    past_due: `<span class="chip ng">お支払いが確認できていません</span>`,
+    canceled: `<span class="chip">解約済み</span>`,
+  }[u.billing.status] ?? "";
+  const canBuy = ["trial", "canceled"].includes(u.plan.key) || u.billing.status === "canceled";
+  return `
+    <div class="row" style="margin-top:12px">
+      ${statusChip}
+      ${canBuy ? u.billing.purchasable.map((k) => `<button class="btn primary" data-checkout="${k}">${esc(u.plans[k].label)}に申し込む</button>`).join("") : ""}
+      ${u.billing.hasCustomer ? `<button class="btn ghost" id="portal">お支払い方法・請求書の管理</button>` : ""}
+    </div>
+    <p class="muted" style="margin:8px 0 0">お支払いは決済サービス Stripe の安全な画面で行います(カード情報は当サービスには保存されません)。<br class="hide-sm" />
+      エンタープライズプランは、${contact} までご相談ください。</p>`;
+}
+
+function bindBilling(body) {
+  body.querySelectorAll("[data-checkout]").forEach((b) =>
+    b.addEventListener("click", () => busy(b, "移動中", async () => {
+      const r = await api("/api/billing/checkout", { method: "POST", body: { plan: b.dataset.checkout } });
+      location.href = r.url;
+    })),
+  );
+  $("#portal")?.addEventListener("click", (e) =>
+    busy(e.currentTarget, "移動中", async () => {
+      const r = await api("/api/billing/portal", { method: "POST" });
+      location.href = r.url;
+    }),
+  );
+}
+
 // =====================================================
 // ログイン・新規登録・招待の受諾
 // =====================================================
@@ -899,11 +942,13 @@ function showAuth(mode, token) {
       </form>
       ${mode === "login" && PUBLIC.allowSignup ? `<p class="switch">アカウントをお持ちでない方は <a href="#" id="to-signup">新規登録</a></p>` : ""}
       ${mode === "signup" && !PUBLIC.firstRun ? `<p class="switch">登録済みの方は <a href="#" id="to-login">ログイン</a></p>` : ""}
-      ${mode === "login" ? `<p class="switch muted">パスワードを忘れた場合は、社内の管理者に再設定リンクの発行を依頼してください。</p>` : ""}
+      ${mode === "login" ? `<p class="switch"><a href="#" id="to-forgot">パスワードを忘れた方</a></p>` : ""}
+      <p class="switch muted" style="font-size:.8rem"><a href="/terms.html" target="_blank">利用規約</a> ・ <a href="/privacy.html" target="_blank">プライバシーポリシー</a> ・ <a href="/tokushoho.html" target="_blank">特定商取引法に基づく表記</a></p>
     </div></div>`;
 
   $("#to-signup")?.addEventListener("click", (e) => { e.preventDefault(); showAuth("signup"); });
   $("#to-login")?.addEventListener("click", (e) => { e.preventDefault(); showAuth("login"); });
+  $("#to-forgot")?.addEventListener("click", (e) => { e.preventDefault(); showForgot(); });
 
   if (mode === "accept") {
     api(`/api/auth/invite/${encodeURIComponent(token)}`)
@@ -933,6 +978,31 @@ function showAuth(mode, token) {
   });
 }
 
+function showForgot() {
+  view.innerHTML = `
+    <div class="auth"><div class="card">
+      <h2>パスワードの再設定</h2>
+      <p class="muted" style="text-align:center">登録しているメールアドレスに、<br />再設定用のリンクをお送りします。</p>
+      <form id="forgot-form" novalidate>
+        <label>メールアドレス</label><input name="email" type="email" required autocomplete="email" />
+        <button class="btn primary" style="width:100%;margin-top:16px" type="submit">送信する</button>
+      </form>
+      <p class="switch"><a href="#" id="back-login">ログイン画面に戻る</a></p>
+    </div></div>`;
+  $("#back-login").addEventListener("click", (e) => { e.preventDefault(); showAuth("login"); });
+  $("#forgot-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const btn = e.currentTarget.querySelector("button");
+    busy(btn, "送信中", async () => {
+      await api("/api/auth/forgot", { method: "POST", body: { email: e.currentTarget.email.value.trim() } });
+      view.querySelector(".card").innerHTML = `<h2>メールを確認してください</h2>
+        <p>入力されたメールアドレスが登録されている場合、<br class="hide-sm" />再設定用のリンクをお送りしました(有効期限:1時間)。</p>
+        <p class="muted">メールが届かない場合は、迷惑メールフォルダもご確認ください。</p>
+        <p class="switch"><a href="/">ログイン画面に戻る</a></p>`;
+    });
+  });
+}
+
 // ---------- 画面切り替え ----------
 const ROUTES = { home: renderHome, research: renderResearch, enterprise: renderEnterprise, crm: renderCrm, meeting: renderMeeting, admin: renderAdmin };
 
@@ -952,6 +1022,8 @@ async function route() {
 function renderBanner() {
   const b = $("#banner");
   const msgs = [];
+  if (META.tenant.billingStatus === "past_due") msgs.push("お支払いが確認できていません。管理 →「プラン・利用状況」からお支払い方法を更新してください。");
+  if (META.tenant.plan === "canceled") msgs.push("ご契約が終了しています。データの閲覧・ダウンロードはできますが、AI機能はご利用いただけません。");
   if (META.tenant.trialExpired) msgs.push("無料トライアル期間が終了しました。AI機能を使うには、プランの変更が必要です。");
   else if (META.tenant.plan === "trial" && META.tenant.trialEndsAt) msgs.push(`無料トライアル中です(${fmtDate(META.tenant.trialEndsAt)} まで)。`);
   if (META.usage.limit && META.usage.used >= META.usage.limit * 0.8) msgs.push(`今月のAI利用回数:${META.usage.used} / ${META.usage.limit}回`);
@@ -998,6 +1070,18 @@ async function start() {
   const m = location.hash.match(/^#accept=(.+)$/);
   if (m) return showAuth("accept", m[1]);
   if (PUBLIC.firstRun) return showAuth("signup");
+
+  // 決済ページから戻ってきたとき
+  const billing = new URLSearchParams(location.search).get("billing");
+  if (billing) {
+    history.replaceState(null, "", `/${location.hash}`);
+    state.adminTab = "usage";
+    setTimeout(() => toast(billing === "success"
+      ? "お申し込みありがとうございます。反映まで数秒かかる場合があります"
+      : "お申し込みを中断しました"), 600);
+    // 決済サービスからの通知を待って、プラン表示を更新する
+    if (billing === "success") setTimeout(() => META.user && start(), 4000);
+  }
   try {
     const res = await fetch("/api/meta");
     if (res.status === 401) return showAuth("login");
