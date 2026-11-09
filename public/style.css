@@ -180,3 +180,27 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top
   .hide-sm { display: none; }
   .pipeline .bar { grid-template-columns: 70px 1fr auto; }
 }
+
+/* ---------- ログイン画面 ---------- */
+.auth { max-width: 420px; margin: 40px auto; }
+.auth .card { padding: 24px; }
+.auth h2 { text-align: center; }
+.auth .switch { text-align: center; margin-top: 14px; font-size: 0.9rem; }
+.check { display: flex; gap: 8px; align-items: flex-start; font-weight: 400; }
+.check input { width: auto; margin-top: 6px; }
+a { color: var(--accent-dark); }
+.section-nav { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
+.integration { border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+.integration + .integration { margin-top: 12px; }
+.link-box { display: flex; gap: 8px; margin-top: 8px; }
+.link-box input { font-size: 0.85rem; }
+[hidden] { display: none !important; }
+
+/* ヘッダー:スマホでもサービス名を1行に収める */
+.brand { min-width: 0; }
+#app-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#user-area { flex-wrap: nowrap; flex-shrink: 0; }
+@media (max-width: 600px) {
+  #mode-badge { display: none; }
+  .brand { font-size: 0.95rem; }
+}

@@ -5,11 +5,14 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node --env-file-if-exists=.env server.js",
-    "dev": "node --watch --env-file-if-exists=.env server.js",
-    "test": "node --test"
+    "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env server.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch --env-file-if-exists=.env server.js",
+    "admin": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/admin.js",
+    "test": "node --disable-warning=ExperimentalWarning --test"
   },
-  "engines": { "node": ">=20.12" },
+  "engines": {
+    "node": ">=22.13"
+  },
   "license": "UNLICENSED",
   "private": true,
   "dependencies": {

@@ -2,7 +2,9 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $("#view");
 let META = { options: { STAGES: [], STATUSES: [], TIERS: [], ROLES: [] }, settings: {} };
-const state = { researchId: null, planId: null, crmTab: "companies", meetingId: null };
+const state = { researchId: null, planId: null, crmTab: "companies", meetingId: null, adminTab: "settings" };
+const isAdmin = () => ["admin", "owner"].includes(META.user?.role);
+const isOwner = () => META.user?.role === "owner";
 
 // ---------- 共通ユーティリティ ----------
 const esc = (v) =>
@@ -20,6 +22,10 @@ async function api(url, opts = {}) {
     body: opts.body && typeof opts.body !== "string" ? JSON.stringify(opts.body) : opts.body,
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && !url.startsWith("/api/auth/")) {
+    showAuth("login");
+    throw new Error("ログインの有効期限が切れました。もう一度ログインしてください");
+  }
   if (!res.ok) throw new Error(data.error || `エラー(${res.status})`);
   return data;
 }
@@ -55,6 +61,9 @@ const stageChip = (s) => {
   const cls = s === "受注" ? "ok" : s === "失注" ? "ng" : ["提案", "交渉"].includes(s) ? "accent" : "";
   return `<span class="chip ${cls}">${esc(s || "—")}</span>`;
 };
+
+const PROVIDER_LABEL = { salesforce: "Salesforce", hubspot: "HubSpot" };
+const extBadge = (r) => (r.external ? ` <span class="chip" title="外部CRMと連携中">${esc(PROVIDER_LABEL[r.external.source] ?? r.external.source)}</span>` : "");
 
 const list = (items, fmt = (x) => esc(x)) =>
   items?.length ? `<ul class="clean">${items.map((x) => `<li>${fmt(x)}</li>`).join("")}</ul>` : `<p class="muted">なし</p>`;
@@ -156,7 +165,8 @@ async function renderHome() {
     ${d.counts.companies === 0 ? `
       <section class="card empty" style="margin-top:16px">
         <p>まだデータがありません。<br />まずはサンプルデータで動きを試してみましょう。</p>
-        <button class="btn primary" id="seed">サンプルデータを入れる</button>
+        ${isAdmin() ? `<button class="btn primary" id="seed">サンプルデータを入れる</button>` : ""}
+        ${isAdmin() && !META.integrations.length ? `<p class="muted" style="margin-top:12px">Salesforce・HubSpot をお使いなら、<a href="#admin">管理 → 外部CRM連携</a> から<br />データをまとめて取り込めます。</p>` : ""}
       </section>` : ""}
 
     <section class="grid grid-kpi" style="margin-top:16px">
@@ -352,14 +362,14 @@ async function renderCrm() {
 
   const tables = {
     companies: () => `<table><thead><tr><th>会社名</th><th>業種</th><th>規模</th><th>ステータス</th><th></th></tr></thead><tbody>
-      ${companies.map((c) => `<tr><td><b>${esc(c.name)}</b></td><td>${esc(c.industry)}</td><td>${esc(c.tier)}</td><td>${esc(c.status)}</td>
+      ${companies.map((c) => `<tr><td><b>${esc(c.name)}</b>${extBadge(c)}</td><td>${esc(c.industry)}</td><td>${esc(c.tier)}</td><td>${esc(c.status)}</td>
         <td class="num"><button class="btn small ghost" data-edit="companies" data-id="${c.id}">編集</button> <button class="btn small danger" data-del="companies" data-id="${c.id}">削除</button></td></tr>`).join("")}</tbody></table>`,
     contacts: () => `<table><thead><tr><th>氏名</th><th>会社</th><th>部署・役職</th><th>役割</th><th>連絡先</th><th></th></tr></thead><tbody>
-      ${contacts.map((p) => `<tr><td><b>${esc(p.name)}</b></td><td>${esc(coName(p.companyId))}</td><td>${esc(p.department)} ${esc(p.title)}</td><td>${esc(p.role)}</td>
+      ${contacts.map((p) => `<tr><td><b>${esc(p.name)}</b>${extBadge(p)}</td><td>${esc(coName(p.companyId))}</td><td>${esc(p.department)} ${esc(p.title)}</td><td>${esc(p.role)}</td>
         <td>${esc(p.email)}<br />${esc(p.phone)}</td>
         <td class="num"><button class="btn small ghost" data-edit="contacts" data-id="${p.id}">編集</button> <button class="btn small danger" data-del="contacts" data-id="${p.id}">削除</button></td></tr>`).join("")}</tbody></table>`,
     deals: () => `<table><thead><tr><th>案件</th><th>会社</th><th>ステージ</th><th>金額</th><th>確度</th><th>次アクション</th><th></th></tr></thead><tbody>
-      ${deals.map((d) => `<tr><td><b>${esc(d.title)}</b></td><td>${esc(coName(d.companyId))}</td><td>${stageChip(d.stage)}</td>
+      ${deals.map((d) => `<tr><td><b>${esc(d.title)}</b>${extBadge(d)}${d.external ? `<br /><button class="btn small ghost" data-push="${d.id}" style="margin-top:4px">${esc(PROVIDER_LABEL[d.external.source] ?? "")}へ送る</button>` : ""}</td><td>${esc(coName(d.companyId))}</td><td>${stageChip(d.stage)}</td>
         <td class="num">${yen(d.amount)}</td><td class="num">${d.probability ?? "—"}%</td><td>${esc(d.nextAction)}<br /><span class="muted">${esc(d.nextActionDate)}</span></td>
         <td class="num"><button class="btn small ghost" data-edit="deals" data-id="${d.id}">編集</button> <button class="btn small danger" data-del="deals" data-id="${d.id}">削除</button></td></tr>`).join("")}</tbody></table>`,
   };
@@ -429,6 +439,12 @@ async function renderCrm() {
     }),
   );
   $("#add").addEventListener("click", async () => { if (await openForm(tab)) renderCrm(); });
+  view.querySelectorAll("[data-push]").forEach((b) =>
+    b.addEventListener("click", () => busy(b, "送信中", async () => {
+      await api(`/api/integrations/push/${b.dataset.push}`, { method: "POST" });
+      toast("外部CRMの商談を更新しました");
+    })),
+  );
   $("#csv").addEventListener("change", async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -576,8 +592,10 @@ function bindMeetingActions(m) {
   if (!m) return;
   $("#apply")?.addEventListener("click", (e) =>
     busy(e.currentTarget, "反映中…", async () => {
-      await api(`/api/meetings/${m.id}/apply`, { method: "POST" });
-      toast("CRMの商談情報を更新しました");
+      const r = await api(`/api/meetings/${m.id}/apply`, { method: "POST" });
+      if (r.pushed?.ok) toast(`CRMを更新し、${r.pushed.provider}にも反映しました`);
+      else if (r.pushed) toast(`CRMは更新しましたが、${r.pushed.provider}への反映に失敗しました:${r.pushed.error}`, true);
+      else toast("CRMの商談情報を更新しました");
       renderMeeting();
     }),
   );
@@ -591,38 +609,335 @@ function bindMeetingActions(m) {
   });
 }
 
+
 // =====================================================
-// 設定
+// 管理(管理者・オーナーのみ)
 // =====================================================
-async function renderSettings() {
-  META = await api("/api/meta");
+const ADMIN_TABS = [
+  ["settings", "自社サービス"],
+  ["integrations", "外部CRM連携"],
+  ["members", "メンバー"],
+  ["usage", "プラン・利用状況"],
+  ["audit", "操作ログ"],
+  ["data", "データ管理"],
+];
+
+async function renderAdmin() {
+  if (!isAdmin()) {
+    view.innerHTML = `<p class="card empty">この画面は管理者だけが利用できます。</p>`;
+    return;
+  }
+  const tabs = ADMIN_TABS.filter(([k]) => k !== "data" || isOwner());
+  if (!tabs.some(([k]) => k === state.adminTab)) state.adminTab = "settings";
   view.innerHTML = `
-    <h2>設定</h2>
-    <section class="card">
-      <h3>自社の提供サービス</h3>
-      <p class="muted" style="margin-top:0">ここに書いた内容をもとに、AIが「提案の切り口」や「開拓プラン」を考えます。<br class="hide-sm" />
-        具体的に書くほど精度が上がります。</p>
-      <textarea id="offering" style="min-height:100px" placeholder="例)営業活動を記録・分析するクラウド型の営業支援サービス。強みは…">${esc(META.settings.offering)}</textarea>
-      <div class="row" style="margin-top:8px"><button class="btn primary" id="save">保存</button></div>
-    </section>
-    <section class="card" style="margin-top:16px">
-      <h3>AIの接続状態</h3>
-      <p>${META.aiEnabled ? `<span class="chip ok">接続済み</span> モデル:${esc(META.model)}` : `<span class="chip warn">デモモード</span> APIキーが設定されていません`}</p>
-      ${META.aiEnabled ? "" : `<p class="muted">実際にAIを使うには、サーバーのフォルダにある <code>.env.example</code> を <code>.env</code> という名前でコピーし、<br class="hide-sm" />
-        <code>ANTHROPIC_API_KEY=</code> の後ろにAPIキーを書いてから、サーバーを再起動してください。</p>`}
-    </section>`;
-  $("#save").addEventListener("click", (e) =>
-    busy(e.currentTarget, "保存中", async () => {
-      await api("/api/settings", { method: "PUT", body: { offering: $("#offering").value } });
-      toast("保存しました");
-    }),
-  );
+    <h2>管理</h2>
+    <p class="lead">${esc(META.tenant.name)} の設定です。</p>
+    <div class="section-nav">${tabs.map(([k, label]) => `<button class="btn small ${k === state.adminTab ? "primary" : "ghost"}" data-sec="${k}">${label}</button>`).join("")}</div>
+    <div id="admin-body"></div>`;
+  view.querySelectorAll("[data-sec]").forEach((b) => b.addEventListener("click", () => { state.adminTab = b.dataset.sec; renderAdmin(); }));
+  const body = $("#admin-body");
+  await ADMIN_RENDER[state.adminTab](body);
+}
+
+const ADMIN_RENDER = {
+  async settings(body) {
+    body.innerHTML = `
+      <section class="card">
+        <h3>自社の提供サービス</h3>
+        <p class="muted" style="margin-top:0">ここに書いた内容をもとに、AIが「提案の切り口」や「開拓プラン」を考えます。<br class="hide-sm" />
+          具体的に書くほど精度が上がります。</p>
+        <textarea id="offering" style="min-height:120px" maxlength="3000" placeholder="例)営業活動を記録・分析するクラウド型の営業支援サービス。強みは…">${esc(META.settings.offering)}</textarea>
+        <div class="row" style="margin-top:8px"><button class="btn primary" id="save">保存</button></div>
+      </section>
+      <section class="card" style="margin-top:16px">
+        <h3>AIの接続状態</h3>
+        <p style="margin:0">${META.aiEnabled ? `<span class="chip ok">接続済み</span>` : `<span class="chip warn">デモモード</span> AIのAPIキーが設定されていないため、AIの結果はサンプル表示です。<br />サービスの運営者にお問い合わせください。`}</p>
+      </section>`;
+    $("#save").addEventListener("click", (e) =>
+      busy(e.currentTarget, "保存中", async () => {
+        await api("/api/settings", { method: "PUT", body: { offering: $("#offering").value } });
+        META.settings.offering = $("#offering").value;
+        toast("保存しました");
+      }),
+    );
+  },
+
+  async integrations(body) {
+    const list = await api("/api/integrations");
+    const guide = {
+      salesforce: `Salesforce の「設定 → アプリケーションマネージャー」で接続アプリケーションを作成し、<br class="hide-sm" />
+        「OAuth 2.0 クライアントログイン情報フロー」を有効にして、実行ユーザーを指定してください。`,
+      hubspot: `HubSpot の「設定 → 連携 → 非公開アプリ」でアプリを作成し、<br class="hide-sm" />
+        会社・コンタクト・取引の読み取りと、取引の書き込みの権限(スコープ)を付けてください。`,
+    };
+    body.innerHTML = `
+      <section class="card">
+        <h3>外部CRM連携</h3>
+        <p class="muted" style="margin-top:0">お使いのCRMから会社・担当者・商談を取り込み、商談分析の結果を書き戻せます。<br class="hide-sm" />
+          接続情報は暗号化して保存され、画面には一部を伏せて表示します。</p>
+        ${list.map((it) => `
+          <div class="integration" data-provider="${it.provider}">
+            <div class="row between">
+              <h3 style="margin:0">${esc(it.label)}</h3>
+              ${it.connected ? `<span class="chip ok">接続済み</span>` : `<span class="chip">未接続</span>`}
+            </div>
+            <p class="muted" style="margin:6px 0 0">${guide[it.provider] ?? ""}</p>
+            <form class="form-grid" data-form>
+              ${it.fields.map((f) => `<div><label>${esc(f.label)}</label>
+                <input name="${f.key}" ${f.secret ? 'type="password" autocomplete="new-password"' : 'type="text"'}
+                  value="${f.secret ? "" : esc(it.config[f.key] ?? "")}" placeholder="${f.secret && it.connected ? `設定済み(${esc(it.config[f.key])})。変更時のみ入力` : esc(f.placeholder ?? "")}" /></div>`).join("")}
+            </form>
+            <label class="check"><input type="checkbox" data-autopush ${it.options.autoPush ? "checked" : ""} />
+              商談分析を「CRMに反映」したとき、${esc(it.label)} の商談にも自動で書き戻す</label>
+            <div class="row" style="margin-top:10px">
+              <button class="btn primary small" data-act="save">${it.connected ? "更新" : "接続する"}</button>
+              ${it.connected ? `
+                <button class="btn ghost small" data-act="test">接続テスト</button>
+                <button class="btn ghost small" data-act="sync">今すぐ取り込み</button>
+                <button class="btn danger small" data-act="delete">接続解除</button>` : ""}
+            </div>
+            ${it.lastSyncAt ? `<p class="muted" style="margin:8px 0 0">最終取り込み:${fmtDate(it.lastSyncAt)}
+              (会社 追加${it.lastResult.companies.added}・更新${it.lastResult.companies.updated} /
+              担当者 追加${it.lastResult.contacts.added}・更新${it.lastResult.contacts.updated} /
+              商談 追加${it.lastResult.deals.added}・更新${it.lastResult.deals.updated})</p>` : ""}
+          </div>`).join("")}
+        <p class="muted" style="margin:12px 0 0">ステージの対応:標準のフェーズ(Salesforce)/標準パイプライン(HubSpot)に合わせて自動で変換します。</p>
+      </section>`;
+
+    body.querySelectorAll("[data-provider]").forEach((box) => {
+      const provider = box.dataset.provider;
+      box.querySelectorAll("[data-act]").forEach((btn) =>
+        btn.addEventListener("click", () => busy(btn, "", async () => {
+          const act = btn.dataset.act;
+          if (act === "save") {
+            const config = Object.fromEntries(new FormData(box.querySelector("[data-form]")));
+            await api(`/api/integrations/${provider}`, { method: "PUT", body: { config, options: { autoPush: box.querySelector("[data-autopush]").checked } } });
+            toast("保存しました。「接続テスト」で確認してください");
+          } else if (act === "test") {
+            await api(`/api/integrations/${provider}/test`, { method: "POST" });
+            toast("接続に成功しました");
+            return;
+          } else if (act === "sync") {
+            const r = await api(`/api/integrations/${provider}/sync`, { method: "POST" });
+            toast(`取り込み完了:会社${r.companies.added + r.companies.updated}件・担当者${r.contacts.added + r.contacts.updated}件・商談${r.deals.added + r.deals.updated}件`);
+          } else if (act === "delete") {
+            if (!confirm("接続を解除しますか?(取り込み済みのデータは残ります)")) return;
+            await api(`/api/integrations/${provider}`, { method: "DELETE" });
+            toast("接続を解除しました");
+          }
+          META = await api("/api/meta");
+          ADMIN_RENDER.integrations(body);
+        })),
+      );
+    });
+  },
+
+  async members(body) {
+    const users = await api("/api/admin/users");
+    body.innerHTML = `
+      <section class="card">
+        <h3>メンバーを招待</h3>
+        <div class="form-grid">
+          <div><label>メールアドレス</label><input type="email" id="inv-email" placeholder="name@example.co.jp" /></div>
+          <div><label>権限</label><select id="inv-role"><option value="member">メンバー(営業機能を利用)</option>${isOwner() ? `<option value="admin">管理者(設定・メンバー管理も可能)</option>` : ""}</select></div>
+        </div>
+        <div class="row" style="margin-top:10px"><button class="btn primary" id="inv-run">招待リンクを発行</button></div>
+        <div id="inv-link"></div>
+      </section>
+      <section class="card" style="margin-top:16px">
+        <h3>メンバー一覧(${users.length}人)</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>氏名</th><th>メール</th><th>権限</th><th class="hide-sm">最終ログイン</th><th></th></tr></thead>
+          <tbody>${users.map((u) => `<tr>
+            <td><b>${esc(u.name)}</b>${u.disabled ? ` <span class="chip ng">停止中</span>` : ""}</td>
+            <td>${esc(u.email)}</td>
+            <td>${u.role !== "owner" && isOwner() && u.id !== META.user.id
+              ? `<select data-role="${u.id}" style="width:auto"><option value="member" ${u.role === "member" ? "selected" : ""}>メンバー</option><option value="admin" ${u.role === "admin" ? "selected" : ""}>管理者</option></select>`
+              : esc(u.roleLabel)}</td>
+            <td class="hide-sm">${u.last_login_at ? fmtDate(u.last_login_at) : "未ログイン"}</td>
+            <td class="num">${u.id === META.user.id || (u.role === "owner" && !isOwner()) ? "" : `
+              <button class="btn small ghost" data-reset="${u.id}">PW再設定</button>
+              <button class="btn small ghost" data-toggle="${u.id}" data-disabled="${u.disabled}">${u.disabled ? "再開" : "停止"}</button>
+              <button class="btn small danger" data-remove="${u.id}">削除</button>`}</td>
+          </tr>`).join("")}</tbody></table></div>
+      </section>`;
+
+    const showLink = (r, note) => {
+      const url = `${location.origin}${r.link}`;
+      $("#inv-link").innerHTML = `<p class="notice" style="margin-top:12px">${esc(note)}<br />このリンクを本人にだけ送ってください。</p>
+        <div class="link-box"><input readonly value="${esc(url)}" id="link-text" /><button class="btn small primary" id="link-copy">コピー</button></div>`;
+      $("#link-copy").addEventListener("click", async () => {
+        try { await navigator.clipboard.writeText(url); toast("コピーしました"); } catch { $("#link-text").select(); }
+      });
+    };
+    $("#inv-run").addEventListener("click", (e) =>
+      busy(e.currentTarget, "発行中", async () => {
+        const r = await api("/api/admin/invites", { method: "POST", body: { email: $("#inv-email").value.trim(), role: $("#inv-role").value } });
+        showLink(r, `招待リンクを発行しました(有効期限:${r.expiresInDays}日)。`);
+      }),
+    );
+    body.querySelectorAll("[data-role]").forEach((sel) =>
+      sel.addEventListener("change", async () => {
+        try { await api(`/api/admin/users/${sel.dataset.role}`, { method: "PUT", body: { role: sel.value } }); toast("権限を変更しました"); }
+        catch (e) { toast(e.message, true); }
+      }),
+    );
+    body.querySelectorAll("[data-reset]").forEach((b) =>
+      b.addEventListener("click", () => busy(b, "", async () => {
+        const r = await api(`/api/admin/users/${b.dataset.reset}/reset-link`, { method: "POST" });
+        showLink(r, `パスワード再設定リンクを発行しました(有効期限:${r.expiresInHours}時間)。`);
+        $("#inv-link").scrollIntoView({ behavior: "smooth" });
+      })),
+    );
+    body.querySelectorAll("[data-toggle]").forEach((b) =>
+      b.addEventListener("click", () => busy(b, "", async () => {
+        await api(`/api/admin/users/${b.dataset.toggle}`, { method: "PUT", body: { disabled: b.dataset.disabled !== "true" } });
+        ADMIN_RENDER.members(body);
+      })),
+    );
+    body.querySelectorAll("[data-remove]").forEach((b) =>
+      b.addEventListener("click", async () => {
+        if (!confirm("このメンバーを削除しますか?")) return;
+        try { await api(`/api/admin/users/${b.dataset.remove}`, { method: "DELETE" }); ADMIN_RENDER.members(body); }
+        catch (e) { toast(e.message, true); }
+      }),
+    );
+  },
+
+  async usage(body) {
+    const u = await api("/api/admin/usage");
+    const total = u.usage.reduce((s, x) => s + x.count, 0);
+    const tokens = u.usage.reduce((s, x) => s + x.input_tokens + x.output_tokens, 0);
+    const pct = u.plan.aiPerMonth ? Math.min(100, (total / u.plan.aiPerMonth) * 100) : 0;
+    body.innerHTML = `
+      <section class="card">
+        <div class="row between"><h3 style="margin:0">現在のプラン:${esc(u.plan.label)}</h3>
+          ${u.trialEndsAt ? `<span class="chip warn">トライアル終了:${fmtDate(u.trialEndsAt)}</span>` : ""}</div>
+        <div class="grid grid-kpi" style="margin-top:12px">
+          <div class="kpi"><div class="label">今月のAI利用(${esc(u.month)})</div><div class="value">${total}<small>回${u.plan.aiPerMonth ? ` / ${u.plan.aiPerMonth}回` : "(上限なし)"}</small></div>
+            ${u.plan.aiPerMonth ? `<div class="score-bar"><i style="width:${pct}%"></i></div>` : ""}</div>
+          <div class="kpi"><div class="label">ユーザー数</div><div class="value">${u.users}<small>人${u.plan.users ? ` / ${u.plan.users}人` : "(上限なし)"}</small></div></div>
+          <div class="kpi"><div class="label">今月のAI処理量</div><div class="value">${tokens.toLocaleString("ja-JP")}<small>トークン</small></div></div>
+        </div>
+        <h4>機能別の利用回数</h4>
+        ${u.usage.length ? `<div class="table-wrap"><table><tbody>${u.usage.map((x) => `<tr><td>${esc(x.feature)}</td><td class="num">${x.count}回</td><td class="num muted">${(x.input_tokens + x.output_tokens).toLocaleString("ja-JP")}トークン</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">今月はまだ利用がありません</p>`}
+      </section>
+      <section class="card" style="margin-top:16px">
+        <h3>プラン一覧</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>プラン</th><th>月額(税抜)</th><th>AI利用/月</th><th>ユーザー数</th></tr></thead>
+          <tbody>${Object.entries(u.plans).filter(([k]) => k !== "internal").map(([k, p]) => `<tr ${k === u.plan.key ? 'class="selected"' : ""}>
+            <td><b>${esc(p.label)}</b></td><td>${p.priceYen === null ? "要相談" : yen(p.priceYen)}</td>
+            <td>${p.aiPerMonth ?? "上限なし"}${p.aiPerMonth ? "回" : ""}</td><td>${p.users ?? "上限なし"}${p.users ? "人" : ""}</td></tr>`).join("")}</tbody>
+        </table></div>
+        <p class="muted" style="margin:8px 0 0">プランの変更は、サービスの運営者にお問い合わせください。</p>
+      </section>`;
+  },
+
+  async audit(body) {
+    const logs = await api("/api/admin/audit");
+    body.innerHTML = `
+      <section class="card">
+        <h3>操作ログ(直近200件)</h3>
+        <p class="muted" style="margin-top:0">誰が・いつ・何をしたかを記録しています。情報漏えいの調査などに使えます。</p>
+        ${logs.length ? `<div class="table-wrap"><table>
+          <thead><tr><th>日時</th><th>操作者</th><th>操作</th><th>内容</th><th class="hide-sm">IP</th></tr></thead>
+          <tbody>${logs.map((l) => `<tr><td style="white-space:nowrap">${fmtDate(l.created_at)}</td><td>${esc(l.user_name)}</td><td>${esc(l.action)}</td><td style="max-width:320px">${esc(l.detail)}</td><td class="hide-sm muted">${esc(l.ip)}</td></tr>`).join("")}</tbody>
+        </table></div>` : `<p class="empty">記録はまだありません</p>`}
+      </section>`;
+  },
+
+  async data(body) {
+    body.innerHTML = `
+      <section class="card">
+        <h3>全データのダウンロード</h3>
+        <p class="muted" style="margin-top:0">会社・担当者・商談・議事録・メンバー情報を、JSON形式で一括ダウンロードします。<br class="hide-sm" />
+          バックアップや、解約時のデータ持ち出しにお使いください。</p>
+        <a class="btn ghost" href="/api/admin/export">ダウンロード</a>
+      </section>
+      <section class="card" style="margin-top:16px;border-color:#f0cccc">
+        <h3 style="color:var(--ng)">解約(全データの削除)</h3>
+        <p class="muted" style="margin-top:0">すべてのデータとメンバーを完全に削除します。<b>元に戻せません。</b><br class="hide-sm" />
+          確認のため、会社名「${esc(META.tenant.name)}」を入力してください。</p>
+        <input id="del-name" placeholder="${esc(META.tenant.name)}" />
+        <div class="row" style="margin-top:10px"><button class="btn danger" id="del-run">すべて削除して解約する</button></div>
+      </section>`;
+    $("#del-run").addEventListener("click", (e) =>
+      busy(e.currentTarget, "削除中", async () => {
+        if (!confirm("本当に削除しますか?この操作は取り消せません。")) return;
+        await api("/api/admin/tenant", { method: "DELETE", body: { confirmName: $("#del-name").value } });
+        location.hash = "";
+        location.reload();
+      }),
+    );
+  },
+};
+
+// =====================================================
+// ログイン・新規登録・招待の受諾
+// =====================================================
+let PUBLIC = { appName: "営業AIプラットフォーム", allowSignup: false, firstRun: false };
+
+function showAuth(mode, token) {
+  $("#tabs").hidden = true;
+  $("#user-area").hidden = true;
+  $("#banner").hidden = true;
+  const title = { login: "ログイン", signup: PUBLIC.firstRun ? "はじめに管理者アカウントを作成" : "無料トライアルを始める", accept: "アカウントの設定" }[mode];
+  view.innerHTML = `
+    <div class="auth"><div class="card">
+      <h2>${esc(title)}</h2>
+      ${mode === "signup" && PUBLIC.firstRun ? `<p class="muted" style="text-align:center">最初に登録した方が「オーナー(管理者)」になります。<br />ほかのメンバーは、ログイン後に招待できます。</p>` : ""}
+      <form id="auth-form" novalidate>
+        <div id="accept-info"></div>
+        ${mode === "signup" ? `<label>会社名</label><input name="companyName" required autocomplete="organization" />` : ""}
+        ${mode !== "login" ? `<label>お名前</label><input name="name" required autocomplete="name" id="f-name" />` : ""}
+        ${mode !== "accept" ? `<label>メールアドレス</label><input name="email" type="email" required autocomplete="email" />` : ""}
+        <label>パスワード${mode !== "login" ? "(10文字以上・英字と数字を含む)" : ""}</label>
+        <input name="password" type="password" required autocomplete="${mode === "login" ? "current-password" : "new-password"}" />
+        ${mode === "signup" && !PUBLIC.firstRun ? `<label class="check"><input type="checkbox" name="agree" value="1" /><span><a href="/terms.html" target="_blank">利用規約</a>と<a href="/privacy.html" target="_blank">プライバシーポリシー</a>に同意します</span></label>` : ""}
+        <button class="btn primary" style="width:100%;margin-top:16px" type="submit">${mode === "login" ? "ログイン" : mode === "signup" ? "登録する" : "設定して始める"}</button>
+      </form>
+      ${mode === "login" && PUBLIC.allowSignup ? `<p class="switch">アカウントをお持ちでない方は <a href="#" id="to-signup">新規登録</a></p>` : ""}
+      ${mode === "signup" && !PUBLIC.firstRun ? `<p class="switch">登録済みの方は <a href="#" id="to-login">ログイン</a></p>` : ""}
+      ${mode === "login" ? `<p class="switch muted">パスワードを忘れた場合は、社内の管理者に再設定リンクの発行を依頼してください。</p>` : ""}
+    </div></div>`;
+
+  $("#to-signup")?.addEventListener("click", (e) => { e.preventDefault(); showAuth("signup"); });
+  $("#to-login")?.addEventListener("click", (e) => { e.preventDefault(); showAuth("login"); });
+
+  if (mode === "accept") {
+    api(`/api/auth/invite/${encodeURIComponent(token)}`)
+      .then((inv) => {
+        $("#accept-info").innerHTML = `<p class="notice">${esc(inv.tenantName)}<br />${inv.kind === "invite" ? "への招待" : "のパスワード再設定"}(${esc(inv.email)})</p>`;
+        if (inv.kind === "reset") {
+          // パスワード再設定では氏名の入力は不要
+          $("#f-name").previousElementSibling.remove();
+          $("#f-name").remove();
+        }
+      })
+      .catch((e) => { view.querySelector(".card").innerHTML = `<p class="empty">${esc(e.message)}</p><p class="switch"><a href="/">ログイン画面へ</a></p>`; });
+  }
+
+  $("#auth-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const btn = e.currentTarget.querySelector("button[type=submit]");
+    const body = Object.fromEntries(new FormData(e.currentTarget));
+    body.agree = Boolean(body.agree);
+    const url = { login: "/api/auth/login", signup: "/api/auth/signup", accept: "/api/auth/accept" }[mode];
+    if (mode === "accept") body.token = token;
+    busy(btn, "処理中", async () => {
+      await api(url, { method: "POST", body });
+      location.hash = "#home";
+      await start();
+    });
+  });
 }
 
 // ---------- 画面切り替え ----------
-const ROUTES = { home: renderHome, research: renderResearch, enterprise: renderEnterprise, crm: renderCrm, meeting: renderMeeting, settings: renderSettings };
+const ROUTES = { home: renderHome, research: renderResearch, enterprise: renderEnterprise, crm: renderCrm, meeting: renderMeeting, admin: renderAdmin };
 
 async function route() {
+  if (!META.user) return;
   const name = location.hash.slice(1) || "home";
   const fn = ROUTES[name] ?? renderHome;
   document.querySelectorAll("#tabs a").forEach((a) => a.classList.toggle("active", a.dataset.tab === name));
@@ -634,15 +949,60 @@ async function route() {
   window.scrollTo(0, 0);
 }
 
+function renderBanner() {
+  const b = $("#banner");
+  const msgs = [];
+  if (META.tenant.trialExpired) msgs.push("無料トライアル期間が終了しました。AI機能を使うには、プランの変更が必要です。");
+  else if (META.tenant.plan === "trial" && META.tenant.trialEndsAt) msgs.push(`無料トライアル中です(${fmtDate(META.tenant.trialEndsAt)} まで)。`);
+  if (META.usage.limit && META.usage.used >= META.usage.limit * 0.8) msgs.push(`今月のAI利用回数:${META.usage.used} / ${META.usage.limit}回`);
+  b.hidden = !msgs.length;
+  b.innerHTML = msgs.length ? `<p class="notice" style="margin:0">${msgs.map(esc).join("<br />")}</p>` : "";
+}
+
+async function start() {
+  META = await api("/api/meta");
+  document.title = META.appName;
+  $("#app-name").textContent = META.appName;
+  $("#tabs").hidden = false;
+  $("#user-area").hidden = false;
+  $("#admin-tab").hidden = !isAdmin();
+  $("#user-name").textContent = `${META.user.name}(${META.user.roleLabel})`;
+  const badge = $("#mode-badge");
+  badge.textContent = META.aiEnabled ? "AI接続中" : "デモモード";
+  badge.className = `badge ${META.aiEnabled ? "ai" : "demo"}`;
+  renderBanner();
+  await route();
+}
+
 (async function init() {
   try {
-    META = await api("/api/meta");
-    const b = $("#mode-badge");
-    b.textContent = META.aiEnabled ? "AI接続中" : "デモモード";
-    b.className = `badge ${META.aiEnabled ? "ai" : "demo"}`;
-  } catch (e) {
+    PUBLIC = await api("/api/public-config");
+    document.title = PUBLIC.appName;
+    $("#app-name").textContent = PUBLIC.appName;
+  } catch {
     toast("サーバーに接続できません", true);
+    return;
   }
-  window.addEventListener("hashchange", route);
-  route();
+  $("#logout").addEventListener("click", async () => {
+    await api("/api/auth/logout", { method: "POST" }).catch(() => {});
+    META = { ...META, user: null };
+    location.hash = "";
+    showAuth("login");
+  });
+  window.addEventListener("hashchange", () => {
+    const m = location.hash.match(/^#accept=(.+)$/);
+    if (m) return showAuth("accept", m[1]);
+    route();
+  });
+
+  const m = location.hash.match(/^#accept=(.+)$/);
+  if (m) return showAuth("accept", m[1]);
+  if (PUBLIC.firstRun) return showAuth("signup");
+  try {
+    const res = await fetch("/api/meta");
+    if (res.status === 401) return showAuth("login");
+    await start();
+  } catch (e) {
+    toast(e.message, true);
+  }
 })();

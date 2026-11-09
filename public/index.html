@@ -8,19 +8,24 @@
 </head>
 <body>
   <header class="topbar">
-    <a href="#home" class="brand"><span class="brand-mark">AI</span>営業AIプラットフォーム</a>
-    <span id="mode-badge" class="badge"></span>
+    <a href="#home" class="brand"><span class="brand-mark">AI</span><span id="app-name">営業AIプラットフォーム</span></a>
+    <div class="row" id="user-area" hidden>
+      <span id="mode-badge" class="badge"></span>
+      <span class="muted hide-sm" id="user-name"></span>
+      <button class="btn small ghost" id="logout">ログアウト</button>
+    </div>
   </header>
 
-  <nav class="tabs" id="tabs">
+  <nav class="tabs" id="tabs" hidden>
     <a href="#home" data-tab="home">ホーム</a>
     <a href="#research" data-tab="research">リサーチ</a>
     <a href="#enterprise" data-tab="enterprise">大手開拓</a>
     <a href="#crm" data-tab="crm">CRM整備</a>
     <a href="#meeting" data-tab="meeting">商談分析</a>
-    <a href="#settings" data-tab="settings">設定</a>
+    <a href="#admin" data-tab="admin" id="admin-tab" hidden>管理</a>
   </nav>
 
+  <div id="banner" class="container" style="padding-bottom:0" hidden></div>
   <main id="view" class="container" aria-live="polite"></main>
 
   <div id="toast" class="toast" role="status"></div>

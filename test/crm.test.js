@@ -1,13 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { Store } from "../lib/db.js";
+import { Database } from "../lib/db.js";
 import { companyKey, normalizeCompanyName, checkQuality, mergeCompanies, parseCsv, toCsv, priorityScore } from "../lib/crm.js";
 import { seed } from "../lib/seed.js";
 
-const tmpStore = () => new Store(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "eigyou-")), "db.json"));
+const tmpStore = () => {
+  const db = new Database(":memory:");
+  return db.forTenant(db.createTenant({ name: "テスト社" }).id);
+};
 
 test("会社名のゆれを同一視する", () => {
   assert.equal(companyKey("株式会社ABC"), companyKey("(株)ABC"));
