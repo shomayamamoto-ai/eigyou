@@ -2,13 +2,18 @@
 //   npm run admin -- tenants                      … 契約企業の一覧
 //   npm run admin -- set-plan <テナントID> <プラン> … プラン変更(internal/trial/standard/enterprise)
 //   npm run admin -- extend-trial <テナントID> <日数>
+//   npm run admin -- backup                       … 今すぐバックアップ
+//   npm run admin -- backup-status                … 最新のバックアップを確認
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Database } from "../lib/db.js";
 import { PLANS } from "../lib/plans.js";
+import { backupDatabase, latestBackup } from "../lib/ops.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const db = new Database(path.join(process.env.DATA_DIR || path.join(here, "..", "data"), "app.db"));
+const dataDir = process.env.DATA_DIR || path.join(here, "..", "data");
+const db = new Database(path.join(dataDir, "app.db"));
+const backupDir = process.env.BACKUP_DIR || path.join(dataDir, "backups");
 const [cmd, ...args] = process.argv.slice(2);
 
 if (cmd === "tenants") {
@@ -36,6 +41,11 @@ if (cmd === "tenants") {
   const base = Math.max(Date.now(), new Date(t.trial_ends_at ?? 0).getTime());
   db.updateTenant(id, { plan: "trial", trial_ends_at: new Date(base + Number(days) * 864e5).toISOString() });
   console.log(`${t.name} のトライアルを ${days} 日延長しました`);
+} else if (cmd === "backup") {
+  console.log(`バックアップを作成しました:${backupDatabase(db, backupDir)}`);
+} else if (cmd === "backup-status") {
+  const b = latestBackup(backupDir);
+  console.log(b ? `最新:${b.file}(${b.at})/保存数:${b.count}` : "バックアップはまだありません");
 } else {
-  console.log("使い方:npm run admin -- tenants | set-plan <id> <plan> | extend-trial <id> <days>");
+  console.log("使い方:npm run admin -- tenants | set-plan <id> <plan> | extend-trial <id> <days> | backup | backup-status");
 }

@@ -2,7 +2,7 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $("#view");
 let META = { options: { STAGES: [], STATUSES: [], TIERS: [], ROLES: [] }, settings: {} };
-const state = { researchId: null, planId: null, crmTab: "companies", meetingId: null, adminTab: "settings" };
+const state = { researchId: null, planId: null, crmTab: "companies", meetingId: null, meetingDealId: null, adminTab: "settings", dealView: "board", crmFilter: "" };
 const isAdmin = () => ["admin", "owner"].includes(META.user?.role);
 const isOwner = () => META.user?.role === "owner";
 
@@ -64,6 +64,84 @@ const stageChip = (s) => {
 
 const PROVIDER_LABEL = { salesforce: "Salesforce", hubspot: "HubSpot" };
 const extBadge = (r) => (r.external ? ` <span class="chip" title="外部CRMと連携中">${esc(PROVIDER_LABEL[r.external.source] ?? r.external.source)}</span>` : "");
+
+// 会社名を「会社の詳細ページ」へのリンクにする
+const coLink = (id, name) => (id ? `<a href="#company/${esc(id)}" class="co-link">${esc(name)}</a>` : esc(name));
+
+// ---------- AIの処理を裏で動かす(待っている間もほかの画面を使える) ----------
+const TASKS = new Map();
+function runTask(key, label, fn, after) {
+  if (TASKS.has(key)) return toast("この処理はすでに実行中です");
+  TASKS.set(key, { label, started: Date.now() });
+  renderTray();
+  fn()
+    .then((r) => {
+      toast(`完了:${label}`);
+      after?.(r);
+    })
+    .catch((e) => toast(`${label}:${e.message}`, true))
+    .finally(() => {
+      TASKS.delete(key);
+      renderTray();
+    });
+}
+const taskRunning = (key) => TASKS.has(key);
+
+function renderTray() {
+  let tray = $("#tray");
+  if (!tray) {
+    tray = document.createElement("div");
+    tray.id = "tray";
+    tray.className = "tray";
+    tray.setAttribute("role", "status");
+    document.body.append(tray);
+  }
+  if (!TASKS.size) {
+    tray.hidden = true;
+    clearInterval(renderTray.timer);
+    renderTray.timer = null;
+    return;
+  }
+  const sec = (t) => { const n = Math.floor((Date.now() - t) / 1000); return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, "0")}`; };
+  tray.hidden = false;
+  tray.innerHTML = `<b><span class="spinner dark"></span>AIが処理中(${TASKS.size}件)</b>${[...TASKS.values()].map((t) => `<div>${esc(t.label)} <span class="muted">${sec(t.started)}</span></div>`).join("")}
+    <div class="muted" style="font-size:.75rem">終わったらお知らせします。ほかの画面を使って大丈夫です。</div>`;
+  renderTray.timer ??= setInterval(renderTray, 1000);
+}
+// AIの処理中にページを閉じようとしたら確認する
+window.addEventListener("beforeunload", (e) => { if (TASKS.size) e.preventDefault(); });
+
+// ---------- メール文面の編集欄(AIの下書きを手直しして保存・コピー) ----------
+function emailEditor(email) {
+  return `<div class="email-editor">
+    <label>件名</label><input data-subj value="${esc(email.subject)}" maxlength="300" />
+    <label>本文</label><textarea data-body rows="10">${esc(email.body)}</textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="btn small primary" data-copy>件名と本文をコピー</button>
+      <button class="btn small ghost" data-save>手直しを保存</button>
+      ${email.edited ? `<span class="chip">手直し済み</span>` : `<span class="muted">AIの下書きです。必要に応じて直してください。</span>`}
+    </div></div>`;
+}
+function bindEmailEditor(root, saveUrl) {
+  const box = root.querySelector(".email-editor");
+  if (!box) return;
+  const val = () => ({ subject: box.querySelector("[data-subj]").value, body: box.querySelector("[data-body]").value });
+  box.querySelector("[data-copy]").addEventListener("click", async () => {
+    const v = val();
+    try {
+      await navigator.clipboard.writeText(`件名:${v.subject}\n\n${v.body}`);
+      toast("コピーしました");
+    } catch {
+      toast("コピーできませんでした。本文を選択してコピーしてください", true);
+    }
+  });
+  box.querySelector("[data-save]").addEventListener("click", (e) =>
+    busy(e.currentTarget, "保存中", async () => {
+      await api(saveUrl, { method: "PUT", body: val() });
+      toast("保存しました");
+    }),
+  );
+}
 
 const list = (items, fmt = (x) => esc(x)) =>
   items?.length ? `<ul class="clean">${items.map((x) => `<li>${fmt(x)}</li>`).join("")}</ul>` : `<p class="muted">なし</p>`;
@@ -162,6 +240,8 @@ async function renderHome() {
       </p>
     </section>
 
+    ${onboardingHtml(d.onboarding)}
+
     ${d.counts.companies === 0 ? `
       <section class="card empty" style="margin-top:16px">
         <p>まだデータがありません。<br />まずはサンプルデータで動きを試してみましょう。</p>
@@ -192,7 +272,7 @@ async function renderHome() {
         <h3>次のアクション(期限順)</h3>
         ${d.upcoming.length ? `<div class="table-wrap"><table><tbody>${d.upcoming.map((u) => `
           <tr><td style="white-space:nowrap">${u.nextActionDate && u.nextActionDate < today() ? `<span class="chip ng">${esc(u.nextActionDate)}</span>` : esc(u.nextActionDate || "期限なし")}</td>
-          <td><b>${esc(u.companyName)}</b><br /><span class="muted">${esc(u.title)}</span></td>
+          <td><b>${coLink(u.companyId, u.companyName)}</b><br /><span class="muted">${esc(u.title)}</span></td>
           <td>${esc(u.nextAction)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">予定はありません</p>`}
       </div>
     </section>`;
@@ -203,6 +283,259 @@ async function renderHome() {
       renderHome();
     }),
   );
+}
+
+// 初回の使い方ガイド(すべて終わるか、「非表示」を押すと消える)
+function onboardingHtml(items) {
+  const done = items.filter((i) => i.done).length;
+  let hidden = false;
+  try { hidden = localStorage.getItem(`onboarding-hidden:${META.tenant.id}`) === "1"; } catch {}
+  if (done === items.length || hidden) return "";
+  setTimeout(() => $("#hide-onboarding")?.addEventListener("click", () => {
+    try { localStorage.setItem(`onboarding-hidden:${META.tenant.id}`, "1"); } catch {}
+    $("#onboarding")?.remove();
+  }));
+  return `<section class="card" id="onboarding" style="margin-top:16px">
+    <div class="row between"><h3 style="margin:0">はじめにやること(${done} / ${items.length})</h3>
+      <button class="btn small ghost" id="hide-onboarding">非表示</button></div>
+    <div class="score-bar" style="margin:10px 0"><i style="width:${(done / items.length) * 100}%"></i></div>
+    <ol class="checklist">${items.map((i) => `<li class="${i.done ? "done" : ""}">${i.done ? `✓ ${esc(i.label)}` : `<a href="${esc(i.href)}">${esc(i.label)}</a>`}</li>`).join("")}</ol>
+  </section>`;
+}
+
+// =====================================================
+// 会社の詳細(担当者・商談・商談記録・リサーチを1画面に)
+// =====================================================
+async function renderCompany(id) {
+  const d = await api(`/api/company-detail/${encodeURIComponent(id)}`);
+  const c = d.company;
+  const r = c.research;
+  document.querySelectorAll("#tabs a").forEach((a) => a.classList.remove("active"));
+  const safeUrl = c.website && /^https?:\/\//i.test(c.website) ? c.website : "";
+  view.innerHTML = `
+    <p style="margin:0 0 8px"><a href="#crm" id="back">← 戻る</a></p>
+    <section class="card">
+      <div class="row between">
+        <div>
+          <h2 style="margin:0">${esc(c.name)}${extBadge(c)}</h2>
+          <div class="row" style="margin-top:4px">
+            ${c.tier ? `<span class="chip ${c.tier === "大手" ? "accent" : ""}">${esc(c.tier)}</span>` : ""}
+            ${c.status ? `<span class="chip">${esc(c.status)}</span>` : ""}
+            ${c.industry ? `<span class="muted">${esc(c.industry)}</span>` : ""}
+            ${safeUrl ? `<a href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">Webサイト</a>` : ""}
+          </div>
+        </div>
+        <div style="text-align:right"><div class="muted">優先度</div><b style="font-size:1.5rem;color:var(--accent)">${d.score}</b></div>
+      </div>
+      ${c.notes ? `<p class="pre" style="margin:12px 0 0">${esc(c.notes)}</p>` : ""}
+      <div class="row" style="margin-top:12px">
+        <button class="btn small ghost" id="edit-co">会社情報を編集</button>
+        <button class="btn small ghost" data-goto="research">リサーチ</button>
+        <button class="btn small ghost" data-goto="enterprise">開拓プラン</button>
+        ${d.deals.length ? `<button class="btn small primary" data-goto="meeting">商談を記録・分析</button>` : ""}
+      </div>
+    </section>
+
+    <div class="grid grid-2" style="margin-top:16px">
+      <section class="card">
+        <div class="row between"><h3 style="margin:0">担当者(${d.contacts.length})</h3><button class="btn small primary" id="add-contact">+ 追加</button></div>
+        ${d.contacts.length ? `<div class="table-wrap" style="margin-top:8px"><table><tbody>${d.contacts.map((p) => `<tr>
+          <td><b>${esc(p.name)}</b><br /><span class="muted">${esc(p.department)} ${esc(p.title)}</span></td>
+          <td>${p.role ? `<span class="chip ${p.role === "決裁者" ? "ok" : ""}">${esc(p.role)}</span>` : ""}</td>
+          <td style="font-size:.85rem">${p.email ? `<a href="mailto:${esc(p.email)}">${esc(p.email)}</a>` : ""}<br />${esc(p.phone)}</td>
+          <td class="num"><button class="btn small ghost" data-edit-contact="${p.id}">編集</button></td></tr>`).join("")}</tbody></table></div>`
+          : `<p class="muted">まだ登録されていません。<br />名刺はCRM整備の「AIで取り込み」から登録できます。</p>`}
+      </section>
+
+      <section class="card">
+        <div class="row between"><h3 style="margin:0">商談(${d.deals.length})</h3><button class="btn small primary" id="add-deal">+ 追加</button></div>
+        ${d.deals.length ? `<div class="table-wrap" style="margin-top:8px"><table><tbody>${d.deals.map((x) => `<tr>
+          <td><b>${esc(x.title)}</b>${extBadge(x)}<br /><span class="muted">${yen(x.amount)}・確度 ${x.probability ?? "—"}%</span></td>
+          <td>${stageChip(x.stage)}</td>
+          <td style="font-size:.85rem">${esc(x.nextAction)}${x.nextActionDate ? `<br /><span class="${x.nextActionDate < today() ? "overdue" : "muted"}">${esc(x.nextActionDate)}</span>` : ""}</td>
+          <td class="num"><button class="btn small ghost" data-edit-deal="${x.id}">編集</button></td></tr>`).join("")}</tbody></table></div>`
+          : `<p class="muted">まだ商談はありません。</p>`}
+      </section>
+    </div>
+
+    <section class="card" style="margin-top:16px">
+      <h3>商談の記録(新しい順)</h3>
+      ${d.meetings.length ? `<ol class="timeline">${d.meetings.map((m) => `<li>
+        <div class="row between"><b>${esc(m.date)}</b><span class="chip accent">確度 ${Math.round(m.analysis?.winProbability ?? 0)}%</span></div>
+        <p style="margin:4px 0">${esc(m.analysis?.summary)}</p>
+        <a href="#meeting" data-open-meeting="${m.id}">分析結果を見る →</a>
+      </li>`).join("")}</ol>` : `<p class="muted">まだ記録はありません。</p>`}
+    </section>
+
+    ${r ? `<section class="card" style="margin-top:16px">
+      <div class="row between"><h3 style="margin:0">リサーチの要点</h3><span class="muted">${fmtDate(r.generatedAt)}</span></div>
+      <p>${esc(r.summary)}</p>
+      <h4>提案の切り口</h4>${list(r.opportunities)}
+      <h4>初回商談で聞くこと</h4>${list(r.keyQuestions)}
+    </section>` : ""}`;
+
+  $("#back").addEventListener("click", (e) => {
+    if (history.length > 1) { e.preventDefault(); history.back(); }
+  });
+  $("#edit-co").addEventListener("click", async () => { if (await openForm("companies", c)) renderCompany(id); });
+  $("#add-contact").addEventListener("click", async () => { if (await openForm("contacts", { companyId: c.id })) renderCompany(id); });
+  $("#add-deal").addEventListener("click", async () => { if (await openForm("deals", { companyId: c.id, stage: "リード" })) renderCompany(id); });
+  view.querySelectorAll("[data-edit-contact]").forEach((b) => b.addEventListener("click", async () => {
+    if (await openForm("contacts", d.contacts.find((x) => x.id === b.dataset.editContact))) renderCompany(id);
+  }));
+  view.querySelectorAll("[data-edit-deal]").forEach((b) => b.addEventListener("click", async () => {
+    if (await openForm("deals", d.deals.find((x) => x.id === b.dataset.editDeal))) renderCompany(id);
+  }));
+  view.querySelectorAll("[data-goto]").forEach((b) => b.addEventListener("click", () => {
+    const to = b.dataset.goto;
+    if (to === "research") state.researchId = c.id;
+    if (to === "enterprise") state.planId = c.id;
+    if (to === "meeting") { state.meetingDealId = d.deals[0]?.id ?? null; state.meetingId = null; }
+    location.hash = `#${to}`;
+  }));
+  view.querySelectorAll("[data-open-meeting]").forEach((a) => a.addEventListener("click", () => { state.meetingId = a.dataset.openMeeting; }));
+}
+
+// =====================================================
+// アカウント(名前・パスワード・2段階認証)
+// =====================================================
+async function renderAccount() {
+  document.querySelectorAll("#tabs a").forEach((a) => a.classList.remove("active"));
+  const u = META.user;
+  view.innerHTML = `
+    <h2>アカウント設定</h2>
+    ${META.mustSetup2fa ? `<p class="notice">${esc(META.tenant.name)} では、2段階認証の設定が必須です。<br class="hide-sm" />設定が終わると、すべての機能を使えるようになります。</p>` : ""}
+    <div class="grid grid-2">
+      <section class="card">
+        <h3>基本情報</h3>
+        <label>メールアドレス</label><input value="${esc(u.email)}" disabled />
+        <label>お名前</label><input id="acc-name" value="${esc(u.name)}" maxlength="100" />
+        <div class="row" style="margin-top:10px"><button class="btn primary" id="acc-save">保存</button></div>
+      </section>
+      <section class="card">
+        <h3>パスワードの変更</h3>
+        <label>現在のパスワード</label><input type="password" id="pw-cur" autocomplete="current-password" />
+        <label>新しいパスワード(10文字以上・英字と数字を含む)</label><input type="password" id="pw-new" autocomplete="new-password" />
+        <div class="row" style="margin-top:10px"><button class="btn primary" id="pw-save">変更する</button></div>
+        <p class="muted" style="margin:8px 0 0">変更すると、ほかの端末ではログアウトされます。</p>
+      </section>
+    </div>
+    <section class="card" style="margin-top:16px" id="mfa-box">
+      <div class="row between"><h3 style="margin:0">2段階認証</h3>
+        ${u.totpEnabled ? `<span class="chip ok">有効</span>` : `<span class="chip warn">未設定</span>`}</div>
+      <p class="muted">ログイン時に、パスワードに加えてスマホのアプリに表示される6桁のコードを入力します。<br class="hide-sm" />
+        パスワードが漏れても、第三者にログインされるのを防げます。</p>
+      ${u.totpEnabled
+        ? `<label>解除するには、パスワードを入力してください</label><input type="password" id="mfa-pw" autocomplete="current-password" />
+           <div class="row" style="margin-top:10px"><button class="btn danger" id="mfa-off">2段階認証を解除</button></div>`
+        : `<button class="btn primary" id="mfa-start">設定を始める</button><div id="mfa-setup"></div>`}
+    </section>`;
+
+  $("#acc-save").addEventListener("click", (e) => busy(e.currentTarget, "保存中", async () => {
+    await api("/api/me", { method: "PUT", body: { name: $("#acc-name").value } });
+    META.user.name = $("#acc-name").value.trim();
+    $("#user-name").textContent = `${META.user.name}(${META.user.roleLabel})`;
+    toast("保存しました");
+  }));
+  $("#pw-save").addEventListener("click", (e) => busy(e.currentTarget, "変更中", async () => {
+    await api("/api/me/password", { method: "PUT", body: { current: $("#pw-cur").value, next: $("#pw-new").value } });
+    $("#pw-cur").value = "";
+    $("#pw-new").value = "";
+    toast("パスワードを変更しました");
+  }));
+  $("#mfa-off")?.addEventListener("click", (e) => busy(e.currentTarget, "解除中", async () => {
+    await api("/api/me/2fa/disable", { method: "POST", body: { password: $("#mfa-pw").value } });
+    META = await api("/api/meta");
+    toast("2段階認証を解除しました");
+    renderAccount();
+  }));
+  $("#mfa-start")?.addEventListener("click", (e) => {
+    const startBtn = e.currentTarget;
+    busy(startBtn, "準備中", async () => {
+      const r = await api("/api/me/2fa/setup", { method: "POST" });
+      startBtn.hidden = true;
+      // QRコードは画像(data URL)にして表示する(サーバーが作ったSVGをそのまま埋め込まない)
+      const qrSrc = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(r.qrSvg)}`;
+      $("#mfa-setup").innerHTML = `
+        <ol class="steps">
+          <li>スマホに「Google Authenticator」や「Microsoft Authenticator」などの認証アプリを入れます。</li>
+          <li>アプリでこのQRコードを読み取ります。<div class="qr"><img src="${qrSrc}" alt="2段階認証の設定用QRコード" width="200" height="200" /></div>
+            <span class="muted">読み取れない場合は、次のキーを手入力してください。<br /><code>${esc(r.secret.match(/.{1,4}/g).join(" "))}</code></span></li>
+          <li>アプリに表示された6桁のコードを入力します。
+            <input id="mfa-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" style="max-width:200px;display:block;margin-top:6px" /></li>
+        </ol>
+        <button class="btn primary" id="mfa-enable">有効にする</button>`;
+      $("#mfa-enable").addEventListener("click", (ev) => busy(ev.currentTarget, "確認中", async () => {
+        const res = await api("/api/me/2fa/enable", { method: "POST", body: { code: $("#mfa-code").value } });
+        META = await api("/api/meta");
+        $("#mfa-box").innerHTML = `
+          <h3>2段階認証を有効にしました</h3>
+          <p class="notice"><b>回復コードを必ず保管してください。</b><br />スマホをなくしたときは、このコードでログインできます(各コード1回限り)。<br />この画面を閉じると、二度と表示されません。</p>
+          <div class="codes">${res.recoveryCodes.map((c) => `<code>${esc(c)}</code>`).join("")}</div>
+          <div class="row" style="margin-top:10px"><button class="btn ghost" id="copy-codes">コピー</button>
+            <button class="btn primary" id="mfa-done">保管しました</button></div>`;
+        $("#copy-codes").addEventListener("click", async () => {
+          try { await navigator.clipboard.writeText(res.recoveryCodes.join("\n")); toast("コピーしました"); } catch { toast("コピーできませんでした", true); }
+        });
+        $("#mfa-done").addEventListener("click", () => { location.hash = "#home"; start(); });
+      }));
+    });
+  });
+}
+
+// ---------- 全体検索(ヘッダーの検索欄) ----------
+function closeSearch() {
+  const box = $("#q-results");
+  if (box) box.hidden = true;
+}
+function setupSearch() {
+  const input = $("#q");
+  const box = $("#q-results");
+  const typeLabel = { company: "会社", contact: "担当者", deal: "商談" };
+  let timer;
+  let items = [];
+  let active = -1;
+  const paint = () => {
+    box.hidden = !input.value.trim();
+    box.innerHTML = items.length
+      ? items.map((r, i) => `<a href="#company/${esc(r.companyId)}" class="${i === active ? "active" : ""}"><span class="chip">${typeLabel[r.type]}</span> <b>${esc(r.title)}</b> <span class="muted">${esc(r.sub)}</span></a>`).join("")
+      : `<div class="muted" style="padding:10px">見つかりませんでした</div>`;
+  };
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const q = input.value.trim();
+      if (!q) { items = []; return closeSearch(); }
+      try {
+        items = await api(`/api/search?q=${encodeURIComponent(q)}`);
+        active = -1;
+        paint();
+      } catch {}
+    }, 200);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      active = Math.max(-1, Math.min(items.length - 1, active + (e.key === "ArrowDown" ? 1 : -1)));
+      paint();
+    } else if (e.key === "Enter" && items.length) {
+      location.hash = `#company/${items[Math.max(0, active)].companyId}`;
+      input.value = "";
+      input.blur();
+    } else if (e.key === "Escape") {
+      closeSearch();
+      input.blur();
+    }
+  });
+  box.addEventListener("click", () => { input.value = ""; closeSearch(); });
+  document.addEventListener("click", (e) => { if (!e.target.closest(".search")) closeSearch(); });
+  // 「/」キーで検索欄へ移動
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "/" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) {
+      e.preventDefault();
+      input.focus();
+    }
+  });
 }
 
 // =====================================================
@@ -224,17 +557,19 @@ async function renderResearch() {
         ${companies.length ? `<div class="table-wrap" style="margin-top:8px"><table><tbody>${companies.map((c) => `
           <tr class="clickable ${c.id === state.researchId ? "selected" : ""}" data-id="${c.id}">
             <td><b>${esc(c.name)}</b><br /><span class="muted">${esc(c.industry || "業種未設定")}</span></td>
-            <td class="num">${c.research ? `<span class="chip ok">調査済</span>` : `<span class="chip">未調査</span>`}</td>
+            <td class="num">${taskRunning(`research:${c.id}`) ? `<span class="chip warn">調査中</span>` : c.research ? `<span class="chip ok">調査済</span>` : `<span class="chip">未調査</span>`}</td>
           </tr>`).join("")}</tbody></table></div>` : `<p class="empty">会社が登録されていません</p>`}
       </div>
       <div class="card" style="grid-column:span 1; min-width:0">
         ${cur ? `
           <div class="row between">
-            <div><h3 style="margin:0">${esc(cur.name)}</h3>
+            <div><h3 style="margin:0">${coLink(cur.id, cur.name)}</h3>
               <span class="muted">${r ? `最終調査:${fmtDate(r.generatedAt)}` : "まだ調査していません"}</span></div>
-            <button class="btn primary" id="run">${r ? "再リサーチ" : "AIでリサーチ"}</button>
+            ${taskRunning(`research:${cur.id}`)
+              ? `<button class="btn primary" disabled><span class="spinner"></span>調査中…</button>`
+              : `<button class="btn primary" id="run">${r ? "再リサーチ" : "AIでリサーチ"}</button>`}
           </div>
-          ${r ? researchHtml(r) : `<p class="empty">右上のボタンで調査を開始します。<br />(Web検索を行うため、1〜3分ほどかかります)</p>`}
+          ${r ? researchHtml(r) : `<p class="empty">右上のボタンで調査を開始します。<br />(Web検索を行うため1〜3分ほどかかりますが、<br class="hide-sm" />その間もほかの画面を使えます)</p>`}
         ` : `<p class="empty">左のリストから会社を選んでください</p>`}
       </div>
     </div>`;
@@ -246,18 +581,18 @@ async function renderResearch() {
     const c = await openForm("companies", { tier: "大手", status: "未接触" });
     if (c) { state.researchId = c.id; renderResearch(); }
   });
-  $("#run")?.addEventListener("click", (e) =>
-    busy(e.currentTarget, "調査中…", async () => {
-      await api(`/api/research/${cur.id}`, { method: "POST" });
-      toast("リサーチが完了しました");
-      renderResearch();
-    }),
-  );
+  $("#run")?.addEventListener("click", () => {
+    const { id, name } = cur;
+    runTask(`research:${id}`, `リサーチ:${name}`, () => api(`/api/research/${id}`, { method: "POST" }), () => {
+      if (location.hash === "#research") renderResearch();
+    });
+    renderResearch();
+  });
 }
 
 function researchHtml(r) {
   return `
-    ${r.demo ? `<p class="notice" style="margin-top:12px">デモモードの結果です(架空のサンプル)。<br />設定タブの手順でAPIキーを設定すると、実際の調査結果になります。</p>` : ""}
+    ${r.demo ? `<p class="notice" style="margin-top:12px">デモモードの結果です(架空のサンプル)。<br />運営者がAIのAPIキーを設定すると、実際の調査結果になります。</p>` : ""}
     <h4>概要</h4><p style="margin:0">${esc(r.summary)}</p>
     <p class="muted" style="margin:6px 0 0">規模感:${esc(r.scale)}</p>
     <h4>主な事業</h4>${list(r.business)}
@@ -301,11 +636,13 @@ async function renderEnterprise() {
     ${cur ? `
     <section class="card" style="margin-top:16px">
       <div class="row between">
-        <div><h3 style="margin:0">${esc(cur.name)} の開拓プラン</h3>
+        <div><h3 style="margin:0">${coLink(cur.id, cur.name)} の開拓プラン</h3>
           <span class="muted">${p ? `作成:${fmtDate(p.generatedAt)}` : cur.research ? "リサーチ結果を使って作成します" : "先にリサーチしておくと精度が上がります"}</span></div>
         <div class="row">
           ${cur.research ? "" : `<a class="btn ghost" href="#research">先にリサーチ</a>`}
-          <button class="btn primary" id="run">${p ? "作り直す" : "開拓プランを作成"}</button>
+          ${taskRunning(`plan:${cur.id}`)
+            ? `<button class="btn primary" disabled><span class="spinner"></span>作成中…</button>`
+            : `<button class="btn primary" id="run">${p ? "作り直す" : "開拓プランを作成"}</button>`}
         </div>
       </div>
       ${p ? planHtml(p) : ""}
@@ -314,21 +651,14 @@ async function renderEnterprise() {
   view.querySelectorAll("tr[data-id]").forEach((tr) =>
     tr.addEventListener("click", () => { state.planId = tr.dataset.id; renderEnterprise(); }),
   );
-  $("#run")?.addEventListener("click", (e) =>
-    busy(e.currentTarget, "作成中…", async () => {
-      await api(`/api/account-plan/${cur.id}`, { method: "POST" });
-      toast("開拓プランを作成しました");
-      renderEnterprise();
-    }),
-  );
-  $("#copy-mail")?.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(`件名:${p.email.subject}\n\n${p.email.body}`);
-      toast("メール文面をコピーしました");
-    } catch {
-      toast("コピーできませんでした。手動で選択してください", true);
-    }
+  $("#run")?.addEventListener("click", () => {
+    const { id, name } = cur;
+    runTask(`plan:${id}`, `開拓プラン:${name}`, () => api(`/api/account-plan/${id}`, { method: "POST" }), () => {
+      if (location.hash === "#enterprise") renderEnterprise();
+    });
+    renderEnterprise();
   });
+  if (p) bindEmailEditor(view, `/api/companies/${cur.id}/plan-email`);
 }
 
 function planHtml(p) {
@@ -344,8 +674,7 @@ function planHtml(p) {
     <div class="table-wrap"><table><thead><tr><th>フェーズ</th><th>やること</th><th>時期</th><th>目標</th></tr></thead>
       <tbody>${p.steps.map((s) => `<tr><td>${esc(s.phase)}</td><td>${esc(s.action)}</td><td>${esc(s.timing)}</td><td>${esc(s.kpi)}</td></tr>`).join("")}</tbody></table></div>
     <h4>初回アプローチメール</h4>
-    <div class="pre"><b>件名:${esc(p.email.subject)}</b>\n\n${esc(p.email.body)}</div>
-    <div class="row" style="margin-top:8px"><button class="btn small ghost" id="copy-mail">文面をコピー</button></div>
+    ${emailEditor(p.email)}
     <h4>リスクと対策</h4>${list(p.risks, (r) => `${esc(r.risk)}<br /><span class="muted">→ ${esc(r.countermeasure)}</span>`)}`;
 }
 
@@ -360,20 +689,26 @@ async function renderCrm() {
   const sevChip = { high: ["ng", "重要"], medium: ["warn", "注意"], low: ["", "軽微"] };
   const tab = state.crmTab;
 
+  // 絞り込み(入力した文字を含むものだけ表示)
+  const f = (items, fields) => {
+    const q = state.crmFilter.normalize("NFKC").toLowerCase().trim();
+    return q ? items.filter((x) => fields(x).some((v) => String(v ?? "").normalize("NFKC").toLowerCase().includes(q))) : items;
+  };
   const tables = {
     companies: () => `<table><thead><tr><th>会社名</th><th>業種</th><th>規模</th><th>ステータス</th><th></th></tr></thead><tbody>
-      ${companies.map((c) => `<tr><td><b>${esc(c.name)}</b>${extBadge(c)}</td><td>${esc(c.industry)}</td><td>${esc(c.tier)}</td><td>${esc(c.status)}</td>
+      ${f(companies, (c) => [c.name, c.industry]).map((c) => `<tr><td><b>${coLink(c.id, c.name)}</b>${extBadge(c)}</td><td>${esc(c.industry)}</td><td>${esc(c.tier)}</td><td>${esc(c.status)}</td>
         <td class="num"><button class="btn small ghost" data-edit="companies" data-id="${c.id}">編集</button> <button class="btn small danger" data-del="companies" data-id="${c.id}">削除</button></td></tr>`).join("")}</tbody></table>`,
     contacts: () => `<table><thead><tr><th>氏名</th><th>会社</th><th>部署・役職</th><th>役割</th><th>連絡先</th><th></th></tr></thead><tbody>
-      ${contacts.map((p) => `<tr><td><b>${esc(p.name)}</b>${extBadge(p)}</td><td>${esc(coName(p.companyId))}</td><td>${esc(p.department)} ${esc(p.title)}</td><td>${esc(p.role)}</td>
+      ${f(contacts, (p) => [p.name, p.email, p.department, coName(p.companyId)]).map((p) => `<tr><td><b>${esc(p.name)}</b>${extBadge(p)}</td><td>${coLink(p.companyId, coName(p.companyId))}</td><td>${esc(p.department)} ${esc(p.title)}</td><td>${esc(p.role)}</td>
         <td>${esc(p.email)}<br />${esc(p.phone)}</td>
         <td class="num"><button class="btn small ghost" data-edit="contacts" data-id="${p.id}">編集</button> <button class="btn small danger" data-del="contacts" data-id="${p.id}">削除</button></td></tr>`).join("")}</tbody></table>`,
     deals: () => `<table><thead><tr><th>案件</th><th>会社</th><th>ステージ</th><th>金額</th><th>確度</th><th>次アクション</th><th></th></tr></thead><tbody>
-      ${deals.map((d) => `<tr><td><b>${esc(d.title)}</b>${extBadge(d)}${d.external ? `<br /><button class="btn small ghost" data-push="${d.id}" style="margin-top:4px">${esc(PROVIDER_LABEL[d.external.source] ?? "")}へ送る</button>` : ""}</td><td>${esc(coName(d.companyId))}</td><td>${stageChip(d.stage)}</td>
+      ${f(deals, (d) => [d.title, d.nextAction, coName(d.companyId)]).map((d) => `<tr><td><b>${esc(d.title)}</b>${extBadge(d)}${d.external ? `<br /><button class="btn small ghost" data-push="${d.id}" style="margin-top:4px">${esc(PROVIDER_LABEL[d.external.source] ?? "")}へ送る</button>` : ""}</td><td>${coLink(d.companyId, coName(d.companyId))}</td><td>${stageChip(d.stage)}</td>
         <td class="num">${yen(d.amount)}</td><td class="num">${d.probability ?? "—"}%</td><td>${esc(d.nextAction)}<br /><span class="muted">${esc(d.nextActionDate)}</span></td>
         <td class="num"><button class="btn small ghost" data-edit="deals" data-id="${d.id}">編集</button> <button class="btn small danger" data-del="deals" data-id="${d.id}">削除</button></td></tr>`).join("")}</tbody></table>`,
   };
   const all = { companies, contacts, deals };
+  const board = tab === "deals" && state.dealView === "board";
 
   view.innerHTML = `
     <h2>CRM整備</h2>
@@ -407,15 +742,32 @@ async function renderCrm() {
           ${["companies", "contacts", "deals"].map((c) => `<button class="btn small ${tab === c ? "primary" : "ghost"}" data-tab="${c}">${LABEL[c]}(${all[c].length})</button>`).join("")}
         </div>
         <div class="row">
+          ${tab === "deals" ? `<button class="btn small ghost" id="toggle-view">${board ? "表で見る" : "ボードで見る"}</button>` : ""}
           <button class="btn small primary" id="add">+ ${LABEL[tab]}を追加</button>
           <a class="btn small ghost" href="/api/export/${tab}">CSV出力</a>
           <label class="btn small ghost" style="margin:0">CSV取込<input type="file" accept=".csv,text/csv" id="csv" hidden /></label>
         </div>
       </div>
-      <div class="table-wrap" style="margin-top:10px">${all[tab].length ? tables[tab]() : `<p class="empty">データがありません</p>`}</div>
+      <input id="crm-filter" placeholder="この一覧を絞り込み(名前・会社名・メールなど)" value="${esc(state.crmFilter)}" style="margin-top:10px" />
+      ${board ? boardHtml(f(deals, (d) => [d.title, d.nextAction, coName(d.companyId)]), coName)
+        : `<div class="table-wrap" style="margin-top:10px">${all[tab].length ? tables[tab]() : `<p class="empty">データがありません</p>`}</div>`}
     </section>`;
 
   view.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { state.crmTab = b.dataset.tab; renderCrm(); }));
+  $("#toggle-view")?.addEventListener("click", () => { state.dealView = board ? "table" : "board"; renderCrm(); });
+  const filter = $("#crm-filter");
+  filter.addEventListener("input", () => {
+    state.crmFilter = filter.value;
+    clearTimeout(renderCrm.t);
+    renderCrm.t = setTimeout(async () => {
+      const pos = filter.selectionStart;
+      await renderCrm();
+      const nf = $("#crm-filter");
+      nf.focus();
+      nf.setSelectionRange(pos, pos);
+    }, 250);
+  });
+  if (board) bindBoard(() => renderCrm());
   view.querySelectorAll("[data-fix]").forEach((b) =>
     b.addEventListener("click", () => busy(b, "", async () => {
       await api("/api/crm/fix", { method: "POST", body: q.issues[Number(b.dataset.fix)] });
@@ -464,6 +816,53 @@ async function renderCrm() {
   );
 }
 
+// ---------- 商談ボード(カンバン):カードをドラッグしてステージを変える ----------
+function boardHtml(deals, coName) {
+  const stages = META.options.STAGES;
+  return `<div class="board" role="list">${stages.map((st) => {
+    const ds = deals.filter((d) => (d.stage || "リード") === st);
+    const sum = ds.reduce((a, d) => a + (Number(d.amount) || 0), 0);
+    return `<div class="col" data-stage="${esc(st)}" role="listitem">
+      <div class="col-head"><b>${esc(st)}</b> <span class="muted">${ds.length}件</span><br /><span class="muted">${sum ? `${man(sum)}${manUnit(sum)}` : "—"}</span></div>
+      ${ds.map((d) => `<div class="kcard" draggable="true" data-deal="${d.id}">
+        <b>${esc(d.title)}</b>${extBadge(d)}
+        <div>${coLink(d.companyId, coName(d.companyId))}</div>
+        <div class="muted">${yen(d.amount)}・確度 ${d.probability ?? "—"}%</div>
+        ${d.nextAction ? `<div class="muted ${d.nextActionDate && d.nextActionDate < today() ? "overdue" : ""}">次:${esc(d.nextAction)}${d.nextActionDate ? `(${esc(d.nextActionDate)})` : ""}</div>` : `<div class="overdue">次のアクション未設定</div>`}
+        <select data-stage-select aria-label="ステージを変更">${stages.map((x) => `<option ${x === (d.stage || "リード") ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>
+      </div>`).join("")}
+    </div>`;
+  }).join("")}</div>
+  <p class="muted" style="margin:6px 0 0">カードをドラッグするか、カード内の選択欄でステージを変更できます。</p>`;
+}
+
+function bindBoard(rerender) {
+  const move = async (id, stage) => {
+    try {
+      await api(`/api/deals/${id}`, { method: "PUT", body: { stage } });
+      toast(`ステージを「${stage}」に変更しました`);
+    } catch (e) {
+      toast(e.message, true);
+    }
+    rerender();
+  };
+  view.querySelectorAll(".kcard").forEach((c) => {
+    c.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", c.dataset.deal); c.classList.add("dragging"); });
+    c.addEventListener("dragend", () => c.classList.remove("dragging"));
+    c.querySelector("[data-stage-select]").addEventListener("change", (e) => move(c.dataset.deal, e.target.value));
+  });
+  view.querySelectorAll(".board .col").forEach((col) => {
+    col.addEventListener("dragover", (e) => { e.preventDefault(); col.classList.add("over"); });
+    col.addEventListener("dragleave", () => col.classList.remove("over"));
+    col.addEventListener("drop", (e) => {
+      e.preventDefault();
+      col.classList.remove("over");
+      const id = e.dataTransfer.getData("text/plain");
+      if (id) move(id, col.dataset.stage);
+    });
+  });
+}
+
 function showExtract(r) {
   const box = $("#ext-result");
   const total = r.companies.length + r.contacts.length + r.deals.length;
@@ -503,12 +902,14 @@ async function renderMeeting() {
         <h3>議事録を分析する</h3>
         <div class="form-grid">
           <div><label>対象の商談</label><select id="m-deal"><option value="">(商談にひもづけない)</option>
-            ${deals.map((d) => `<option value="${d.id}">${esc(coName(d.companyId))}|${esc(d.title)}</option>`).join("")}</select></div>
+            ${deals.map((d) => `<option value="${d.id}" ${d.id === state.meetingDealId ? "selected" : ""}>${esc(coName(d.companyId))}|${esc(d.title)}</option>`).join("")}</select>
+            <span class="muted" style="font-size:.8rem">商談を選ぶと、過去の商談記録もふまえて分析します</span></div>
           <div><label>商談日</label><input type="date" id="m-date" value="${today()}" /></div>
         </div>
         <label>議事録・文字起こし</label>
         <textarea id="m-text" style="min-height:220px" placeholder="例)&#10;営業:本日はありがとうございます。現在の営業報告はどのようにされていますか?&#10;顧客:Excelで日報を出していて、1日30分くらいかかっています…"></textarea>
-        <div class="row" style="margin-top:8px"><button class="btn primary" id="m-run">AIで分析</button></div>
+        <div class="row" style="margin-top:8px"><button class="btn primary" id="m-run">AIで分析</button>
+          <span class="muted">分析には30秒〜1分ほどかかります。その間もほかの画面を使えます。</span></div>
       </section>
 
       <section class="card">
@@ -526,18 +927,19 @@ async function renderMeeting() {
   view.querySelectorAll("tr[data-id]").forEach((tr) =>
     tr.addEventListener("click", () => { state.meetingId = tr.dataset.id; renderMeeting(); }),
   );
-  $("#m-run").addEventListener("click", (e) =>
-    busy(e.currentTarget, "分析中…", async () => {
-      const m = await api("/api/meetings/analyze", {
-        method: "POST",
-        body: { dealId: $("#m-deal").value || null, date: $("#m-date").value, transcript: $("#m-text").value },
-      });
+  $("#m-run").addEventListener("click", () => {
+    const body = { dealId: $("#m-deal").value || null, date: $("#m-date").value, transcript: $("#m-text").value };
+    if (!body.transcript.trim()) return toast("議事録を入力してください", true);
+    const label = `商談分析:${body.dealId ? dealName(body.dealId) : body.date}`;
+    runTask(`analyze:${Date.now()}`, label, () => api("/api/meetings/analyze", { method: "POST", body }), async (m) => {
       state.meetingId = m.id;
-      toast("分析が完了しました");
-      await renderMeeting();
-      $("#m-result").scrollIntoView({ behavior: "smooth" });
-    }),
-  );
+      if (location.hash === "#meeting") {
+        await renderMeeting();
+        $("#m-result")?.scrollIntoView({ behavior: "smooth" });
+      }
+    });
+    $("#m-text").value = "";
+  });
   bindMeetingActions(cur);
 }
 
@@ -549,7 +951,7 @@ function meetingHtml(m, dealLabel) {
   return `
     <section class="card" style="margin-top:16px">
       <div class="row between">
-        <div><h3 style="margin:0">分析結果:${esc(dealLabel)}</h3><span class="muted">${esc(m.date)} の商談</span></div>
+        <div><h3 style="margin:0">分析結果:${m.companyId ? `<a href="#company/${esc(m.companyId)}" class="co-link">${esc(dealLabel)}</a>` : esc(dealLabel)}</h3><span class="muted">${esc(m.date)} の商談${m.createdBy ? `(記録:${esc(m.createdBy)})` : ""}</span></div>
         <div style="text-align:right"><div class="muted">受注確度</div><div style="font-size:1.8rem;font-weight:700;color:var(--accent)">${Math.round(a.winProbability)}%</div></div>
       </div>
       ${a.demo ? `<p class="notice">デモモードの結果です(架空のサンプル)。</p>` : ""}
@@ -583,8 +985,7 @@ function meetingHtml(m, dealLabel) {
       </div>
 
       <h4>お礼・フォローメール</h4>
-      <div class="pre"><b>件名:${esc(a.followupEmail.subject)}</b>\n\n${esc(a.followupEmail.body)}</div>
-      <div class="row" style="margin-top:8px"><button class="btn small ghost" id="copy-follow">文面をコピー</button></div>
+      ${emailEditor(a.followupEmail)}
     </section>`;
 }
 
@@ -599,14 +1000,7 @@ function bindMeetingActions(m) {
       renderMeeting();
     }),
   );
-  $("#copy-follow")?.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(`件名:${m.analysis.followupEmail.subject}\n\n${m.analysis.followupEmail.body}`);
-      toast("メール文面をコピーしました");
-    } catch {
-      toast("コピーできませんでした", true);
-    }
-  });
+  bindEmailEditor($("#m-result"), `/api/meetings/${m.id}/followup`);
 }
 
 
@@ -650,9 +1044,25 @@ const ADMIN_RENDER = {
         <div class="row" style="margin-top:8px"><button class="btn primary" id="save">保存</button></div>
       </section>
       <section class="card" style="margin-top:16px">
+        <h3>セキュリティ</h3>
+        <label class="check"><input type="checkbox" id="req2fa" ${META.settings.require2fa ? "checked" : ""} />
+          <span>全メンバーに2段階認証を必須にする<br /><span class="muted">オンにすると、未設定のメンバーは次の操作の前に設定画面が表示されます。</span></span></label>
+      </section>
+      <section class="card" style="margin-top:16px">
         <h3>AIの接続状態</h3>
         <p style="margin:0">${META.aiEnabled ? `<span class="chip ok">接続済み</span>` : `<span class="chip warn">デモモード</span> AIのAPIキーが設定されていないため、AIの結果はサンプル表示です。<br />サービスの運営者にお問い合わせください。`}</p>
       </section>`;
+    $("#req2fa").addEventListener("change", async (e) => {
+      try {
+        await api("/api/settings", { method: "PUT", body: { require2fa: e.target.checked } });
+        META = await api("/api/meta");
+        toast(e.target.checked ? "2段階認証を必須にしました" : "2段階認証の必須を解除しました");
+        if (META.mustSetup2fa) { location.hash = "#account"; start(); }
+      } catch (err) {
+        e.target.checked = !e.target.checked;
+        toast(err.message, true);
+      }
+    });
     $("#save").addEventListener("click", (e) =>
       busy(e.currentTarget, "保存中", async () => {
         await api("/api/settings", { method: "PUT", body: { offering: $("#offering").value } });
@@ -749,7 +1159,7 @@ const ADMIN_RENDER = {
         <div class="table-wrap"><table>
           <thead><tr><th>氏名</th><th>メール</th><th>権限</th><th class="hide-sm">最終ログイン</th><th></th></tr></thead>
           <tbody>${users.map((u) => `<tr>
-            <td><b>${esc(u.name)}</b>${u.disabled ? ` <span class="chip ng">停止中</span>` : ""}</td>
+            <td><b>${esc(u.name)}</b>${u.disabled ? ` <span class="chip ng">停止中</span>` : ""}${u.totp_enabled ? ` <span class="chip ok" title="2段階認証">2FA</span>` : ""}</td>
             <td>${esc(u.email)}</td>
             <td>${u.role !== "owner" && isOwner() && u.id !== META.user.id
               ? `<select data-role="${u.id}" style="width:auto"><option value="member" ${u.role === "member" ? "selected" : ""}>メンバー</option><option value="admin" ${u.role === "admin" ? "selected" : ""}>管理者</option></select>`
@@ -924,6 +1334,7 @@ let PUBLIC = { appName: "営業AIプラットフォーム", allowSignup: false, 
 function showAuth(mode, token) {
   $("#tabs").hidden = true;
   $("#user-area").hidden = true;
+  $("#search-area").hidden = true;
   $("#banner").hidden = true;
   const title = { login: "ログイン", signup: PUBLIC.firstRun ? "はじめに管理者アカウントを作成" : "無料トライアルを始める", accept: "アカウントの設定" }[mode];
   view.innerHTML = `
@@ -940,7 +1351,7 @@ function showAuth(mode, token) {
         ${mode === "signup" && !PUBLIC.firstRun ? `<label class="check"><input type="checkbox" name="agree" value="1" /><span><a href="/terms.html" target="_blank">利用規約</a>と<a href="/privacy.html" target="_blank">プライバシーポリシー</a>に同意します</span></label>` : ""}
         <button class="btn primary" style="width:100%;margin-top:16px" type="submit">${mode === "login" ? "ログイン" : mode === "signup" ? "登録する" : "設定して始める"}</button>
       </form>
-      ${mode === "login" && PUBLIC.allowSignup ? `<p class="switch">アカウントをお持ちでない方は <a href="#" id="to-signup">新規登録</a></p>` : ""}
+      ${mode === "login" && PUBLIC.allowSignup ? `<p class="switch">アカウントをお持ちでない方は <a href="#" id="to-signup">新規登録</a><br /><a href="/about">サービス紹介を見る</a></p>` : ""}
       ${mode === "signup" && !PUBLIC.firstRun ? `<p class="switch">登録済みの方は <a href="#" id="to-login">ログイン</a></p>` : ""}
       ${mode === "login" ? `<p class="switch"><a href="#" id="to-forgot">パスワードを忘れた方</a></p>` : ""}
       <p class="switch muted" style="font-size:.8rem"><a href="/terms.html" target="_blank">利用規約</a> ・ <a href="/privacy.html" target="_blank">プライバシーポリシー</a> ・ <a href="/tokushoho.html" target="_blank">特定商取引法に基づく表記</a></p>
@@ -971,7 +1382,31 @@ function showAuth(mode, token) {
     const url = { login: "/api/auth/login", signup: "/api/auth/signup", accept: "/api/auth/accept" }[mode];
     if (mode === "accept") body.token = token;
     busy(btn, "処理中", async () => {
-      await api(url, { method: "POST", body });
+      const r = await api(url, { method: "POST", body });
+      if (r.mfaRequired) return showMfa(r.mfaToken);
+      location.hash = "#home";
+      await start();
+    });
+  });
+}
+
+// 2段階認証のコード入力
+function showMfa(mfaToken) {
+  view.innerHTML = `
+    <div class="auth"><div class="card">
+      <h2>2段階認証</h2>
+      <p class="muted" style="text-align:center">認証アプリに表示されている<br />6桁のコードを入力してください。</p>
+      <form id="mfa-form" novalidate>
+        <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="11" placeholder="123456" style="text-align:center;font-size:1.4rem;letter-spacing:.2em" autofocus />
+        <button class="btn primary" style="width:100%;margin-top:16px" type="submit">確認する</button>
+      </form>
+      <p class="switch muted" style="font-size:.85rem">スマホをなくした場合は、回復コード(XXXXX-XXXXX)を入力してください。</p>
+      <p class="switch"><a href="/">ログイン画面に戻る</a></p>
+    </div></div>`;
+  $("#mfa-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    busy(e.currentTarget.querySelector("button"), "確認中", async () => {
+      await api("/api/auth/mfa", { method: "POST", body: { mfaToken, code: e.currentTarget.code.value } });
       location.hash = "#home";
       await start();
     });
@@ -1004,15 +1439,18 @@ function showForgot() {
 }
 
 // ---------- 画面切り替え ----------
-const ROUTES = { home: renderHome, research: renderResearch, enterprise: renderEnterprise, crm: renderCrm, meeting: renderMeeting, admin: renderAdmin };
+const ROUTES = { home: renderHome, research: renderResearch, enterprise: renderEnterprise, crm: renderCrm, meeting: renderMeeting, admin: renderAdmin, company: renderCompany, account: renderAccount };
 
 async function route() {
   if (!META.user) return;
-  const name = location.hash.slice(1) || "home";
+  let [name, param] = (location.hash.slice(1) || "home").split("/");
+  // 2段階認証が必須なのに未設定の間は、アカウント設定だけを表示する
+  if (META.mustSetup2fa) name = "account";
   const fn = ROUTES[name] ?? renderHome;
   document.querySelectorAll("#tabs a").forEach((a) => a.classList.toggle("active", a.dataset.tab === name));
+  closeSearch();
   try {
-    await fn();
+    await fn(param && decodeURIComponent(param));
   } catch (e) {
     view.innerHTML = `<p class="card empty">読み込みに失敗しました:${esc(e.message)}</p>`;
   }
@@ -1035,8 +1473,9 @@ async function start() {
   META = await api("/api/meta");
   document.title = META.appName;
   $("#app-name").textContent = META.appName;
-  $("#tabs").hidden = false;
+  $("#tabs").hidden = Boolean(META.mustSetup2fa);
   $("#user-area").hidden = false;
+  $("#search-area").hidden = Boolean(META.mustSetup2fa);
   $("#admin-tab").hidden = !isAdmin();
   $("#user-name").textContent = `${META.user.name}(${META.user.roleLabel})`;
   const badge = $("#mode-badge");
@@ -1061,6 +1500,7 @@ async function start() {
     location.hash = "";
     showAuth("login");
   });
+  setupSearch();
   window.addEventListener("hashchange", () => {
     const m = location.hash.match(/^#accept=(.+)$/);
     if (m) return showAuth("accept", m[1]);
@@ -1070,6 +1510,11 @@ async function start() {
   const m = location.hash.match(/^#accept=(.+)$/);
   if (m) return showAuth("accept", m[1]);
   if (PUBLIC.firstRun) return showAuth("signup");
+  // サービス紹介ページの「無料で試す」から来たとき
+  if (location.hash === "#signup" && PUBLIC.allowSignup) {
+    const r = await fetch("/api/meta");
+    if (r.status === 401) return showAuth("signup");
+  }
 
   // 決済ページから戻ってきたとき
   const billing = new URLSearchParams(location.search).get("billing");
