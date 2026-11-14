@@ -257,3 +257,8 @@ a { color: var(--accent-dark); }
 .qr img { display: block; }
 .codes { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
 .codes code { background: #faf8f6; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; text-align: center; font-size: .95rem; }
+
+/* スマホでは、商談のない列を細くして、中身のある列を見やすくする */
+@media (max-width: 600px) {
+  .board .col.empty { flex-basis: 96px; }
+}

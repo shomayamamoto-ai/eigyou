@@ -2,7 +2,7 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $("#view");
 let META = { options: { STAGES: [], STATUSES: [], TIERS: [], ROLES: [] }, settings: {} };
-const state = { researchId: null, planId: null, crmTab: "companies", meetingId: null, meetingDealId: null, adminTab: "settings", dealView: "board", crmFilter: "" };
+const state = { researchId: null, planId: null, crmTab: "companies", meetingId: null, meetingDealId: null, adminTab: "settings", dealView: "board", crmFilter: "", ownerFilter: "all", homeMine: false };
 const isAdmin = () => ["admin", "owner"].includes(META.user?.role);
 const isOwner = () => META.user?.role === "owner";
 
@@ -13,7 +13,8 @@ const yen = (n) => (n || n === 0 ? `${Math.round(Number(n)).toLocaleString("ja-J
 const man = (n) => (Number(n) >= 10000 ? `${Math.round(Number(n) / 10000).toLocaleString("ja-JP")}` : `${Number(n || 0).toLocaleString("ja-JP")}`);
 const manUnit = (n) => (Number(n) >= 10000 ? "万円" : "円");
 const fmtDate = (s) => (s ? new Date(s).toLocaleString("ja-JP", { dateStyle: "short", timeStyle: "short" }) : "");
-const today = () => new Date().toISOString().slice(0, 10);
+// 今日の日付(利用者のパソコン・スマホの時刻で判定。sv-SE は YYYY-MM-DD 形式)
+const today = () => new Date().toLocaleDateString("sv-SE");
 
 async function api(url, opts = {}) {
   const res = await fetch(url, {
@@ -165,7 +166,7 @@ const FORMS = {
     ["email", "メール", "email"],
     ["phone", "電話", "tel"],
   ],
-  deals: (companies) => [
+  deals: (companies, members = []) => [
     ["companyId", "会社", companies.map((c) => [c.id, c.name]), true],
     ["title", "案件名", "text", true],
     ["stage", "ステージ", META.options.STAGES],
@@ -174,6 +175,7 @@ const FORMS = {
     ["nextAction", "次のアクション"],
     ["nextActionDate", "次アクション期限", "date"],
     ["closeDate", "受注予定日", "date"],
+    ["ownerId", "担当者(社内)", members.map((m) => [m.id, m.name])],
   ],
 };
 const LABEL = { companies: "会社", contacts: "担当者", deals: "商談" };
@@ -181,7 +183,9 @@ const LABEL = { companies: "会社", contacts: "担当者", deals: "商談" };
 async function openForm(col, record = {}) {
   const companies = col === "companies" ? [] : await api("/api/companies");
   if (col !== "companies" && !companies.length) return toast("先に会社を登録してください", true);
-  const fields = FORMS[col](companies);
+  const members = col === "deals" ? await api("/api/members") : [];
+  if (col === "deals" && !record.id && record.ownerId === undefined) record = { ...record, ownerId: META.user.id };
+  const fields = FORMS[col](companies, members);
   $("#dialog-title").textContent = `${LABEL[col]}を${record.id ? "編集" : "追加"}`;
   $("#dialog-body").innerHTML = `<div class="form-grid">${fields
     .map(([k, label, type = "text", required]) => {
@@ -221,7 +225,7 @@ async function openForm(col, record = {}) {
 // ホーム
 // =====================================================
 async function renderHome() {
-  const d = await api("/api/dashboard");
+  const d = await api(`/api/dashboard${state.homeMine ? "?mine=1" : ""}`);
   const maxCount = Math.max(1, ...d.byStage.map((s) => s.count));
   const qChip = d.quality.score >= 80 ? "ok" : d.quality.score >= 50 ? "warn" : "ng";
   view.innerHTML = `
@@ -269,13 +273,16 @@ async function renderHome() {
         </div>
       </div>
       <div class="card">
-        <h3>次のアクション(期限順)</h3>
+        <div class="row between"><h3 style="margin:0">次のアクション(期限順)</h3>
+          <div class="row"><button class="btn small ${state.homeMine ? "primary" : "ghost"}" data-mine="1">自分</button><button class="btn small ${state.homeMine ? "ghost" : "primary"}" data-mine="0">全員</button></div></div>
+        ${d.my.openDeals ? `<p class="muted" style="margin:8px 0">自分の担当:進行中 ${d.my.openDeals}件${d.my.overdue ? `・<span class="overdue">期限切れ ${d.my.overdue}件</span>` : ""}${d.my.noNextAction ? `・<span class="overdue">次のアクション未設定 ${d.my.noNextAction}件</span>` : ""}</p>` : ""}
         ${d.upcoming.length ? `<div class="table-wrap"><table><tbody>${d.upcoming.map((u) => `
           <tr><td style="white-space:nowrap">${u.nextActionDate && u.nextActionDate < today() ? `<span class="chip ng">${esc(u.nextActionDate)}</span>` : esc(u.nextActionDate || "期限なし")}</td>
           <td><b>${coLink(u.companyId, u.companyName)}</b><br /><span class="muted">${esc(u.title)}</span></td>
           <td>${esc(u.nextAction)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">予定はありません</p>`}
       </div>
     </section>`;
+  view.querySelectorAll("[data-mine]").forEach((b) => b.addEventListener("click", () => { state.homeMine = b.dataset.mine === "1"; renderHome(); }));
   $("#seed")?.addEventListener("click", (e) =>
     busy(e.currentTarget, "登録中", async () => {
       await api("/api/seed", { method: "POST" });
@@ -410,6 +417,8 @@ async function renderAccount() {
         <h3>基本情報</h3>
         <label>メールアドレス</label><input value="${esc(u.email)}" disabled />
         <label>お名前</label><input id="acc-name" value="${esc(u.name)}" maxlength="100" />
+        <label class="check" style="margin-top:12px"><input type="checkbox" id="acc-digest" ${u.digestOptout ? "" : "checked"} />
+          <span>平日の朝に「今日やること」メールを受け取る<br /><span class="muted">担当している商談の、期限切れ・本日期限のアクションをお知らせします。</span></span></label>
         <div class="row" style="margin-top:10px"><button class="btn primary" id="acc-save">保存</button></div>
       </section>
       <section class="card">
@@ -432,8 +441,9 @@ async function renderAccount() {
     </section>`;
 
   $("#acc-save").addEventListener("click", (e) => busy(e.currentTarget, "保存中", async () => {
-    await api("/api/me", { method: "PUT", body: { name: $("#acc-name").value } });
+    await api("/api/me", { method: "PUT", body: { name: $("#acc-name").value, digestOptout: !$("#acc-digest").checked } });
     META.user.name = $("#acc-name").value.trim();
+    META.user.digestOptout = !$("#acc-digest").checked;
     $("#user-name").textContent = `${META.user.name}(${META.user.roleLabel})`;
     toast("保存しました");
   }));
@@ -600,7 +610,7 @@ function researchHtml(r) {
     <h4>想定される課題</h4>${list(r.challenges, (c) => `${esc(c.text)} <span class="chip ${c.basis === "事実" ? "ok" : "warn"}">${esc(c.basis)}</span>`)}
     <h4>提案の切り口</h4>${list(r.opportunities)}
     <h4>初回商談で聞くこと</h4>${list(r.keyQuestions)}
-    ${r.sources?.length ? `<h4>出典</h4>${list(r.sources.slice(0, 12), (s) => `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title)}</a>`)}` : ""}
+    ${r.sources?.length ? `<h4>出典</h4>${list(r.sources.slice(0, 12), (s) => (/^https?:\/\//i.test(s.url) ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title)}</a>` : esc(s.title)))}` : ""}
     <div class="row" style="margin-top:16px"><a class="btn ghost" href="#enterprise">この情報で大手開拓プランを作る →</a></div>`;
 }
 
@@ -682,9 +692,12 @@ function planHtml(p) {
 // ③ CRM整備
 // =====================================================
 async function renderCrm() {
-  const [q, companies, contacts, deals] = await Promise.all([
-    api("/api/crm/quality"), api("/api/companies"), api("/api/contacts"), api("/api/deals"),
+  const [q, companies, contacts, deals, members] = await Promise.all([
+    api("/api/crm/quality"), api("/api/companies"), api("/api/contacts"), api("/api/deals"), api("/api/members"),
   ]);
+  const ownerName = (id) => members.find((m) => m.id === id)?.name ?? "未割り当て";
+  const of = state.ownerFilter;
+  const dealsShown = deals.filter((d) => of === "all" || (of === "me" ? d.ownerId === META.user.id : of === "none" ? !d.ownerId : d.ownerId === of));
   const coName = (id) => companies.find((c) => c.id === id)?.name ?? "(不明)";
   const sevChip = { high: ["ng", "重要"], medium: ["warn", "注意"], low: ["", "軽微"] };
   const tab = state.crmTab;
@@ -703,7 +716,7 @@ async function renderCrm() {
         <td>${esc(p.email)}<br />${esc(p.phone)}</td>
         <td class="num"><button class="btn small ghost" data-edit="contacts" data-id="${p.id}">編集</button> <button class="btn small danger" data-del="contacts" data-id="${p.id}">削除</button></td></tr>`).join("")}</tbody></table>`,
     deals: () => `<table><thead><tr><th>案件</th><th>会社</th><th>ステージ</th><th>金額</th><th>確度</th><th>次アクション</th><th></th></tr></thead><tbody>
-      ${f(deals, (d) => [d.title, d.nextAction, coName(d.companyId)]).map((d) => `<tr><td><b>${esc(d.title)}</b>${extBadge(d)}${d.external ? `<br /><button class="btn small ghost" data-push="${d.id}" style="margin-top:4px">${esc(PROVIDER_LABEL[d.external.source] ?? "")}へ送る</button>` : ""}</td><td>${coLink(d.companyId, coName(d.companyId))}</td><td>${stageChip(d.stage)}</td>
+      ${f(dealsShown, (d) => [d.title, d.nextAction, coName(d.companyId)]).map((d) => `<tr><td><b>${esc(d.title)}</b>${extBadge(d)}${d.external ? `<br /><button class="btn small ghost" data-push="${d.id}" style="margin-top:4px">${esc(PROVIDER_LABEL[d.external.source] ?? "")}へ送る</button>` : ""}</td><td>${coLink(d.companyId, coName(d.companyId))}<br /><span class="muted">担当:${esc(ownerName(d.ownerId))}</span></td><td>${stageChip(d.stage)}</td>
         <td class="num">${yen(d.amount)}</td><td class="num">${d.probability ?? "—"}%</td><td>${esc(d.nextAction)}<br /><span class="muted">${esc(d.nextActionDate)}</span></td>
         <td class="num"><button class="btn small ghost" data-edit="deals" data-id="${d.id}">編集</button> <button class="btn small danger" data-del="deals" data-id="${d.id}">削除</button></td></tr>`).join("")}</tbody></table>`,
   };
@@ -742,19 +755,25 @@ async function renderCrm() {
           ${["companies", "contacts", "deals"].map((c) => `<button class="btn small ${tab === c ? "primary" : "ghost"}" data-tab="${c}">${LABEL[c]}(${all[c].length})</button>`).join("")}
         </div>
         <div class="row">
-          ${tab === "deals" ? `<button class="btn small ghost" id="toggle-view">${board ? "表で見る" : "ボードで見る"}</button>` : ""}
+          ${tab === "deals" ? `<select id="owner-filter" aria-label="担当者で絞り込み" style="width:auto;padding:5px 8px;font-size:.8rem">
+            <option value="all" ${of === "all" ? "selected" : ""}>全員の商談</option>
+            <option value="me" ${of === "me" ? "selected" : ""}>自分の商談</option>
+            ${members.filter((m) => m.id !== META.user.id).map((m) => `<option value="${esc(m.id)}" ${of === m.id ? "selected" : ""}>${esc(m.name)}</option>`).join("")}
+            <option value="none" ${of === "none" ? "selected" : ""}>未割り当て</option></select>
+            <button class="btn small ghost" id="toggle-view">${board ? "表で見る" : "ボードで見る"}</button>` : ""}
           <button class="btn small primary" id="add">+ ${LABEL[tab]}を追加</button>
           <a class="btn small ghost" href="/api/export/${tab}">CSV出力</a>
           <label class="btn small ghost" style="margin:0">CSV取込<input type="file" accept=".csv,text/csv" id="csv" hidden /></label>
         </div>
       </div>
       <input id="crm-filter" placeholder="この一覧を絞り込み(名前・会社名・メールなど)" value="${esc(state.crmFilter)}" style="margin-top:10px" />
-      ${board ? boardHtml(f(deals, (d) => [d.title, d.nextAction, coName(d.companyId)]), coName)
+      ${board ? boardHtml(f(dealsShown, (d) => [d.title, d.nextAction, coName(d.companyId)]), coName, ownerName)
         : `<div class="table-wrap" style="margin-top:10px">${all[tab].length ? tables[tab]() : `<p class="empty">データがありません</p>`}</div>`}
     </section>`;
 
   view.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { state.crmTab = b.dataset.tab; renderCrm(); }));
   $("#toggle-view")?.addEventListener("click", () => { state.dealView = board ? "table" : "board"; renderCrm(); });
+  $("#owner-filter")?.addEventListener("change", (e) => { state.ownerFilter = e.target.value; renderCrm(); });
   const filter = $("#crm-filter");
   filter.addEventListener("input", () => {
     state.crmFilter = filter.value;
@@ -817,17 +836,18 @@ async function renderCrm() {
 }
 
 // ---------- 商談ボード(カンバン):カードをドラッグしてステージを変える ----------
-function boardHtml(deals, coName) {
+function boardHtml(deals, coName, ownerName) {
   const stages = META.options.STAGES;
   return `<div class="board" role="list">${stages.map((st) => {
     const ds = deals.filter((d) => (d.stage || "リード") === st);
     const sum = ds.reduce((a, d) => a + (Number(d.amount) || 0), 0);
-    return `<div class="col" data-stage="${esc(st)}" role="listitem">
+    return `<div class="col ${ds.length ? "" : "empty"}" data-stage="${esc(st)}" role="listitem">
       <div class="col-head"><b>${esc(st)}</b> <span class="muted">${ds.length}件</span><br /><span class="muted">${sum ? `${man(sum)}${manUnit(sum)}` : "—"}</span></div>
       ${ds.map((d) => `<div class="kcard" draggable="true" data-deal="${d.id}">
         <b>${esc(d.title)}</b>${extBadge(d)}
         <div>${coLink(d.companyId, coName(d.companyId))}</div>
         <div class="muted">${yen(d.amount)}・確度 ${d.probability ?? "—"}%</div>
+        <div class="muted">担当:${esc(ownerName(d.ownerId))}</div>
         ${d.nextAction ? `<div class="muted ${d.nextActionDate && d.nextActionDate < today() ? "overdue" : ""}">次:${esc(d.nextAction)}${d.nextActionDate ? `(${esc(d.nextActionDate)})` : ""}</div>` : `<div class="overdue">次のアクション未設定</div>`}
         <select data-stage-select aria-label="ステージを変更">${stages.map((x) => `<option ${x === (d.stage || "リード") ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>
       </div>`).join("")}
