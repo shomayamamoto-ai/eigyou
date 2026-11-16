@@ -165,12 +165,12 @@ test("全体検索・会社詳細・AI文面の手直し", async () => {
   assert.equal(e.data.accountPlan.email.edited, true);
 
   const deal = d.data.deals[0];
-  const m = await owner("POST", "/api/meetings/analyze", { dealId: deal.id, transcript: "1回目", date: "2026-11-01" });
-  await owner("POST", "/api/meetings/analyze", { dealId: deal.id, transcript: "2回目", date: "2026-11-10" });
+  const m = await owner("POST", "/api/meetings/analyze", { dealId: deal.id, transcript: "1回目", date: "2099-01-01" });
+  await owner("POST", "/api/meetings/analyze", { dealId: deal.id, transcript: "2回目", date: "2099-01-10" });
   const f = await owner("PUT", `/api/meetings/${m.data.id}/followup`, { subject: "お礼", body: "本文を直しました" });
   assert.equal(f.data.analysis.followupEmail.body, "本文を直しました");
   const d2 = await owner("GET", `/api/company-detail/${co.id}`);
-  assert.equal(d2.data.meetings[0].date, "2026-11-10", "新しい順");
+  assert.equal(d2.data.meetings[0].date, "2099-01-10", "新しい順");
   assert.equal(d2.data.meetings[0].transcript, undefined, "一覧では議事録の全文を返さない");
 });
 

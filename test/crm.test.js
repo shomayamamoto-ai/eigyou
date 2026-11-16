@@ -27,10 +27,11 @@ test("重複を検出し、統合すると担当者が付け替わる", () => {
   const q = checkQuality(s);
   const dup = q.issues.find((i) => i.fix === "merge");
   assert.ok(dup, "重複が検出される");
+  const before = s.list("companies").length;
   const dropId = dup.ids[1];
   s.insert("contacts", { companyId: dropId, name: "テスト", email: "t@example.com" });
   mergeCompanies(s, dup.ids);
-  assert.equal(s.list("companies").length, 3);
+  assert.equal(s.list("companies").length, before - 1);
   assert.ok(s.list("contacts").every((p) => s.get("companies", p.companyId)));
   assert.ok(!checkQuality(s).issues.some((i) => i.fix === "merge"));
 });

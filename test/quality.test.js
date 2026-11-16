@@ -182,3 +182,29 @@ test("2段階認証:同じコードの使い回しはできない", async () => 
   assert.equal(again.status, 401);
   assert.match(again.data.error, /すでに使われました/);
 });
+
+test("デモモード:実在するかもしれない会社には、作り話の調査結果を出さない", async () => {
+  const c = await owner("POST", "/api/companies", { name: "実在しそうな商事株式会社", website: "https://real-company.co.jp" });
+  // 2段階認証を有効にした後なので、新しくログインし直さずに同じ接続で実行
+  const r = await owner("POST", `/api/research/${c.data.id}`);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.research.demo, true);
+  assert.match(r.data.research.summary, /【見本】/);
+  assert.ok(!/売上高|従業員/.test(r.data.research.scale.replace(/(.*)/, "")), "具体的な数字を出さない");
+});
+
+test("レポート:見込額・受注率・担当者別を集計する", async () => {
+  const fresh = client();
+  // 見本データで確認(別テナントは作れないので、同じ会社にサンプルを追加)
+  await owner("POST", "/api/seed");
+  const r = await owner("GET", "/api/reports");
+  assert.equal(r.status, 200);
+  assert.equal(r.data.forecast.length, 6);
+  assert.ok(r.data.summary.wonCount >= 2 && r.data.summary.lostCount >= 1);
+  assert.equal(r.data.summary.winRate, Math.round((r.data.summary.wonCount / (r.data.summary.wonCount + r.data.summary.lostCount)) * 100));
+  const sumWeighted = r.data.forecast.reduce((a, f) => a + f.weighted, 0);
+  assert.ok(sumWeighted > 0 && sumWeighted <= r.data.summary.weighted);
+  assert.ok(r.data.byOwner.some((o) => o.name === "営業 花子" && o.open > 0), "見本の商談はメンバーにも割り振られる");
+  assert.ok(r.data.attention.every((a) => a.reason));
+  assert.equal((await fresh("GET", "/api/reports")).status, 401);
+});

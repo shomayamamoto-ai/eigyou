@@ -262,3 +262,18 @@ a { color: var(--accent-dark); }
 @media (max-width: 600px) {
   .board .col.empty { flex-basis: 96px; }
 }
+
+/* ---------- レポートの棒グラフ ---------- */
+.chart { display: flex; gap: 8px; height: 200px; padding-bottom: 22px; }
+.chart .y-axis { display: flex; flex-direction: column; justify-content: space-between; font-size: .72rem; color: var(--muted); text-align: right; white-space: nowrap; transform: translateY(-.6em); height: calc(100% + 1.2em); }
+.chart .plot { position: relative; flex: 1; display: flex; align-items: flex-end; min-width: 0; }
+.chart .grid-line { position: absolute; left: 0; right: 0; height: 1px; background: var(--border); }
+.chart .col-slot { position: relative; flex: 1; height: 100%; display: flex; justify-content: center; align-items: flex-end; outline: none; cursor: default; }
+.chart .col-slot:hover, .chart .col-slot:focus-visible { background: rgba(232, 93, 54, .06); }
+.chart .vbar { width: min(24px, 60%); background: var(--accent); border-radius: 4px 4px 0 0; position: relative; z-index: 1; min-height: 0; }
+.chart .x-label { position: absolute; bottom: -22px; font-size: .78rem; color: var(--muted); }
+.chart .bar-label { position: absolute; font-size: .75rem; font-weight: 700; color: var(--text); white-space: nowrap; z-index: 2; }
+.chart-tip { position: absolute; top: -6px; transform: translateX(-50%); background: #2a2522; color: #fff; padding: 8px 12px; border-radius: 8px; font-size: .8rem; line-height: 1.5; white-space: nowrap; z-index: 5; pointer-events: none; }
+.chart-tip b { font-size: 1rem; display: block; }
+.chart-tip .muted { color: #cfc8c3; }
+details > summary { cursor: pointer; color: var(--accent-dark); font-size: .88rem; font-weight: 600; }

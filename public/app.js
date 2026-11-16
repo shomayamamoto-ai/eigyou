@@ -1025,6 +1025,113 @@ function bindMeetingActions(m) {
 
 
 // =====================================================
+// レポート(売上の見込み・受注率・担当者別)
+// =====================================================
+async function renderReport() {
+  const r = await api("/api/reports");
+  const s = r.summary;
+  const manYen = (n) => `${man(n)}${manUnit(n)}`;
+  const maxF = Math.max(1, ...r.forecast.map((f) => f.weighted));
+  // 目盛りは「きりのよい数字」にする(例:最大 730万 → 上限 800万)
+  const niceMax = (() => {
+    const p = 10 ** Math.floor(Math.log10(maxF));
+    return Math.ceil(maxF / p) * p;
+  })();
+  const peak = r.forecast.reduce((a, f) => (f.weighted > a.weighted ? f : a), r.forecast[0]);
+  const monthLabel = (m) => `${Number(m.slice(5))}月`;
+  const maxStage = Math.max(1, ...r.byStage.map((x) => x.total));
+
+  view.innerHTML = `
+    <h2>レポート</h2>
+    <p class="lead">進行中の商談から、今後の売上の見込みと、チームの状況をまとめています。</p>
+
+    <section class="grid grid-kpi">
+      <div class="card kpi"><div class="label">確度を加味した見込額</div><div class="value">${man(s.weighted)}<small>${manUnit(s.weighted)}</small></div><span class="muted">進行中 ${s.openCount}件・総額 ${manYen(s.pipeline)}</span></div>
+      <div class="card kpi"><div class="label">受注率</div><div class="value">${s.winRate === null ? "—" : s.winRate}<small>${s.winRate === null ? "" : "%"}</small></div><span class="muted">受注 ${s.wonCount}件・失注 ${s.lostCount}件</span></div>
+      <div class="card kpi"><div class="label">受注額(累計)</div><div class="value">${man(s.wonAmount)}<small>${manUnit(s.wonAmount)}</small></div><span class="muted">${s.wonCount}件</span></div>
+      <div class="card kpi"><div class="label">平均の受注額</div><div class="value">${s.avgWonAmount === null ? "—" : man(s.avgWonAmount)}<small>${s.avgWonAmount === null ? "" : manUnit(s.avgWonAmount)}</small></div><span class="muted">1件あたり</span></div>
+    </section>
+
+    <section class="card" style="margin-top:16px">
+      <h3 style="margin-bottom:2px">月別の受注見込み(確度を加味した金額)</h3>
+      <p class="muted" style="margin:0 0 12px">受注予定日が入っている進行中の商談を、「金額 × 確度」で月ごとに合計しています。</p>
+      <div class="chart" id="forecast-chart" role="img" aria-label="月別の受注見込みの棒グラフ。詳しい数値は下の表にあります。">
+        <div class="y-axis">${[1, 0.5, 0].map((t) => `<span>${t === 0 ? "0" : manYen(niceMax * t)}</span>`).join("")}</div>
+        <div class="plot">
+          ${[1, 0.5, 0].map((t) => `<i class="grid-line" style="bottom:${t * 100}%"></i>`).join("")}
+          ${r.forecast.map((f, i) => `
+            <div class="col-slot" tabindex="0" data-i="${i}">
+              ${f === peak && f.weighted > 0 ? `<span class="bar-label" style="bottom:calc(${(f.weighted / niceMax) * 100}% + 4px)">${esc(manYen(f.weighted))}</span>` : ""}
+              <div class="vbar" style="height:${(f.weighted / niceMax) * 100}%"></div>
+              <span class="x-label">${monthLabel(f.month)}</span>
+            </div>`).join("")}
+          <div class="chart-tip" id="chart-tip" hidden></div>
+        </div>
+      </div>
+      ${r.undated.count ? `<p class="muted" style="margin:28px 0 0">このほか、受注予定日が未入力(または6か月より先)の商談が ${r.undated.count}件(総額 ${esc(manYen(r.undated.total))})あります。</p>` : ""}
+      <details style="margin-top:${r.undated.count ? 8 : 28}px"><summary>表で見る</summary>
+        <div class="table-wrap"><table><thead><tr><th>月</th><th class="num">商談数</th><th class="num">総額</th><th class="num">確度加味</th></tr></thead>
+        <tbody>${r.forecast.map((f) => `<tr><td>${esc(f.month)}</td><td class="num">${f.count}件</td><td class="num">${yen(f.total)}</td><td class="num">${yen(f.weighted)}</td></tr>`).join("")}</tbody></table></div>
+      </details>
+    </section>
+
+    <div class="grid grid-2" style="margin-top:16px">
+      <section class="card">
+        <h3>ステージ別の金額(進行中)</h3>
+        <div class="pipeline">
+          ${r.byStage.map((x) => `<div class="bar"><span>${esc(x.stage)}</span>
+            <div class="track"><i style="width:${(x.total / maxStage) * 100}%"></i></div>
+            <span class="muted" style="white-space:nowrap">${x.count}件・${esc(x.total ? manYen(x.total) : "—")}</span></div>`).join("")}
+        </div>
+      </section>
+      <section class="card">
+        <h3>対応が必要な商談</h3>
+        ${r.attention.length ? `<div class="table-wrap"><table><tbody>${r.attention.map((a) => `<tr>
+          <td><b>${esc(a.title)}</b><br />${coLink(a.companyId, a.companyName)}</td>
+          <td>${stageChip(a.stage)}</td>
+          <td><span class="overdue">${esc(a.reason)}</span><br /><span class="muted">${yen(a.amount)}</span></td></tr>`).join("")}</tbody></table></div>`
+          : `<p class="empty">期限切れ・次のアクション未設定の商談はありません</p>`}
+      </section>
+    </div>
+
+    <section class="card" style="margin-top:16px">
+      <h3>担当者別</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>担当者</th><th class="num">進行中</th><th class="num">総額</th><th class="num">確度加味</th><th class="num">期限切れ</th><th class="num">次アクション未設定</th><th class="num">受注額</th></tr></thead>
+        <tbody>${r.byOwner.map((o) => `<tr><td><b>${esc(o.name)}</b></td><td class="num">${o.open}件</td><td class="num">${yen(o.pipeline)}</td><td class="num">${yen(o.weighted)}</td>
+          <td class="num">${o.overdue ? `<span class="overdue">${o.overdue}件</span>` : "0件"}</td><td class="num">${o.noNextAction ? `<span class="overdue">${o.noNextAction}件</span>` : "0件"}</td><td class="num">${yen(o.wonAmount)}</td></tr>`).join("")}</tbody>
+      </table></div>
+    </section>`;
+
+  // グラフにマウスを乗せる(またはキーボードで選ぶ)と、その月の内訳を表示する
+  const tip = $("#chart-tip");
+  const plot = view.querySelector(".plot");
+  view.querySelectorAll(".col-slot").forEach((slot) => {
+    const f = r.forecast[Number(slot.dataset.i)];
+    const show = () => {
+      tip.textContent = "";
+      const b = document.createElement("b");
+      b.textContent = manYen(f.weighted);
+      const l1 = document.createElement("div");
+      l1.textContent = `${f.month.replace("-", "年")}月の見込み`;
+      const l2 = document.createElement("div");
+      l2.className = "muted";
+      l2.textContent = `${f.count}件・総額 ${manYen(f.total)}`;
+      tip.append(b, l1, l2);
+      tip.hidden = false;
+      const x = slot.offsetLeft + slot.offsetWidth / 2;
+      const half = tip.offsetWidth / 2;
+      tip.style.left = `${Math.max(half, Math.min(plot.clientWidth - half, x))}px`;
+    };
+    const hide = () => { tip.hidden = true; };
+    slot.addEventListener("pointerenter", show);
+    slot.addEventListener("pointerleave", hide);
+    slot.addEventListener("focus", show);
+    slot.addEventListener("blur", hide);
+  });
+}
+
+// =====================================================
 // 管理(管理者・オーナーのみ)
 // =====================================================
 const ADMIN_TABS = [
@@ -1459,7 +1566,7 @@ function showForgot() {
 }
 
 // ---------- 画面切り替え ----------
-const ROUTES = { home: renderHome, research: renderResearch, enterprise: renderEnterprise, crm: renderCrm, meeting: renderMeeting, admin: renderAdmin, company: renderCompany, account: renderAccount };
+const ROUTES = { home: renderHome, research: renderResearch, enterprise: renderEnterprise, crm: renderCrm, meeting: renderMeeting, admin: renderAdmin, company: renderCompany, account: renderAccount, report: renderReport };
 
 async function route() {
   if (!META.user) return;
