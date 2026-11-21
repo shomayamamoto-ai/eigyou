@@ -1315,10 +1315,10 @@ async function renderReport() {
           <tbody>${r.accuracy.months.map((m) => `<tr><td>${esc(m.month)}</td>
             <td class="num">${m.monthBefore ? yen(m.monthBefore.weighted) : "—"}</td>
             <td class="num">${m.sameMonth ? yen(m.sameMonth.weighted) : "—"}</td>
-            <td class="num">${yen(m.actual.total)}<br /><span class="muted">${m.actual.count}件</span></td>
+            <td class="num">${yen(m.actual.total)}<br /><span class="muted">${m.actual.count}件${m.compared ? `(予測後 ${yen(m.compared.total)})` : ""}</span></td>
             <td class="num">${m.errorRate === null ? "—" : `${m.errorRate > 0 ? "+" : ""}${m.errorRate}%`}</td></tr>`).join("")}</tbody>
         </table></div>
-        <p class="muted" style="margin:6px 0 0">ずれ =(予測 − 実績)÷ 実績。実績が0円の月は計算しません。</p>`
+        <p class="muted" style="margin:6px 0 0">ずれ =(予測 − 実績)÷ 実績。前月はじめの予測があればそれを使い、なければ当月の予測を、予測を取った日以降の実績と比べます。実績が0円の月は計算しません。</p>`
         : `<p class="empty">記録が始まったばかりです。月が終わるごとに、ここに予測と実績の比較が表示されます。</p>`}
     </section>
 

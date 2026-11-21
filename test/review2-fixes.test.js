@@ -45,7 +45,8 @@ test("#4 中略つきの引用は、順番どおり・十分な長さの部分�
 
 test("#6 【名前】・Teams形式の時刻・箇条書きを、メモではなく発言として扱う", () => {
   const lines = classifyLines("【田中】予算は1000万円で確保済みです\n[10:02:33 AM] 田中: 来期からです\n* 予算は1000万円\n(メモ:確認する)\n※補足");
-  assert.deepEqual(lines.map((l) => l.kind), ["customer", "customer", "unknown", "memo", "memo"]);
+  // 3行目の箇条書きは、直前の田中さんの発言の続き
+  assert.deepEqual(lines.map((l) => l.kind), ["customer", "customer", "customer", "memo", "memo"]);
   assert.equal(lines[0].speaker, "田中");
 });
 

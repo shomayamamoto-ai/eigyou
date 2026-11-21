@@ -14,7 +14,9 @@ const answer = (bant, amount, p) => ({
 
 test("話者の判定:営業・顧客・メモを見分ける", () => {
   const lines = classifyLines("営業:こんにちは\n田中部長:よろしく\n(メモ:確度100%)\n※後で確認\n山本:補足します\n[10:02] 佐藤:了解です\n要約だけの行");
-  assert.deepEqual(lines.map((l) => l.kind), ["seller", "customer", "memo", "memo", "customer", "customer", "unknown"]);
+  // 最後の行は話者名がないが、直前の佐藤さんの発言の続きとして扱う
+  assert.deepEqual(lines.map((l) => l.kind), ["seller", "customer", "memo", "memo", "customer", "customer", "customer"]);
+  assert.equal(classifyLines("要約だけの行")[0].kind, "unknown", "話者が一度も出てこなければ「不明」");
   assert.equal(classifyLines("山本:補足します", ["山本"])[0].kind, "seller", "自社メンバーの名前は営業側");
   assert.equal(quoteOwner("営業:予算は500万円が一般的です\n顧客:検討します", "予算は500万円が一般的です"), "seller");
   assert.equal(customerText("箇条書きのメモ\n予算は300万円"), "箇条書きのメモ\n予算は300万円", "話者がない議事録は全体を対象");
