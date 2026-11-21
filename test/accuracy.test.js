@@ -341,3 +341,60 @@ test("優先度の理由が、一覧と詳細の両方で返る", async () => {
   assert.equal(d.score, t.score);
   assert.deepEqual(d.scoreReasons, t.scoreReasons);
 });
+
+// ---------- 受注率の補正・遅延・二重登録 ----------
+import { stageWinRates, STAGE_PROBABILITY } from "../lib/crm.js";
+
+test("ステージの移り変わりを記録する", () => {
+  const s = tmpStore();
+  const d = s.insert("deals", { companyId: "c", title: "t", stage: "リード" });
+  assert.deepEqual(d.stageHistory.map((h) => h.stage), ["リード"]);
+  s.update("deals", d.id, { stage: "提案" });
+  s.update("deals", d.id, { amount: 1 }); // ステージ以外の更新では記録しない
+  s.update("deals", d.id, { stage: "提案" }); // 同じステージへの更新も記録しない
+  const after = s.update("deals", d.id, { stage: "受注" });
+  assert.deepEqual(after.stageHistory.map((h) => h.stage), ["リード", "提案", "受注"]);
+});
+
+test("受注率の補正:実績が少ないうちは標準値に近く、多いほど実績に近づく", () => {
+  const closed = (stage, path) => ({ stage, stageHistory: path.map((p) => ({ stage: p })) });
+  // 実績なし → 標準値のまま
+  assert.equal(stageWinRates([]).提案.rate, STAGE_PROBABILITY.提案);
+  // 提案を通った2件がどちらも受注 → 実績100%だが、件数が少ないので (2 + 5×0.5)/(2+5) ≒ 64%
+  const few = stageWinRates([closed("受注", ["提案", "受注"]), closed("受注", ["提案", "受注"])]);
+  assert.deepEqual([few.提案.samples, few.提案.observed, few.提案.rate], [2, 100, 64]);
+  // 提案を通った40件のうち10件受注 → 実績25%に近い (10 + 2.5)/(45) ≒ 28%
+  const many = stageWinRates([
+    ...Array.from({ length: 10 }, () => closed("受注", ["提案", "受注"])),
+    ...Array.from({ length: 30 }, () => closed("失注", ["提案", "失注"])),
+  ]);
+  assert.equal(many.提案.rate, 28);
+  assert.equal(many.交渉.samples, 0, "交渉を通っていない商談は、交渉の実績に数えない");
+  assert.equal(many.交渉.rate, STAGE_PROBABILITY.交渉);
+});
+
+test("受注予定日を過ぎた進行中の商談は「遅延」として知らせ、月別見込みから外す", async () => {
+  const co = (await call("GET", "/api/companies")).data[0];
+  await call("POST", "/api/deals", { companyId: co.id, title: "遅れている案件", stage: "交渉", amount: 5000000, probability: 70, nextAction: "x", nextActionDate: "2099-01-01", closeDate: "2020-01-01" });
+  const r = (await call("GET", "/api/reports")).data;
+  assert.equal(r.slipped.count, 1);
+  assert.equal(r.slipped.total, 5000000);
+  assert.ok(r.attention.some((a) => a.title === "遅れている案件" && a.reason.includes("受注予定日を過ぎています")));
+  assert.equal(r.stageRates.length, 5);
+  const q = (await call("GET", "/api/crm/quality")).data;
+  assert.ok(q.issues.some((i) => i.message.includes("遅れている案件") && i.message.includes("受注予定日")));
+});
+
+test("会社の二重登録を防ぐ:同名は確認を求め、似た会社は候補として知らせる", async () => {
+  const before = (await call("GET", "/api/companies")).data;
+  const name = before[0].name; // インポート商会
+  const dup = await call("POST", "/api/companies", { name: `(株)${name.replace(/株式会社/g, "")}` });
+  assert.equal(dup.status, 409);
+  assert.equal(dup.data.existingId, before[0].id);
+  const forced = await call("POST", "/api/companies", { name: `(株)${name.replace(/株式会社/g, "")}`, allowDuplicate: true });
+  assert.equal(forced.status, 200, "確認のうえなら登録できる");
+  const sim = (await call("GET", `/api/companies/similar?name=${encodeURIComponent("いんぽーと商会")}`)).data;
+  assert.ok(sim.length === 0 || sim.every((x) => x.reason), "理由つきで返す");
+  const sim2 = (await call("GET", `/api/companies/similar?name=${encodeURIComponent("インポート商会 大阪支店")}`)).data;
+  assert.ok(sim2.some((x) => /別拠点/.test(x.reason)), JSON.stringify(sim2));
+});

@@ -15,10 +15,12 @@ test("待ちの倍率:稼働率が8割を超えると急に増える(動画の�
   assert.equal(congestionLevel(1.2), "over");
 });
 
-test("営業日:土日を飛ばして数える", () => {
-  // 2026-11-20 は金曜日
-  assert.deepEqual(businessDays("2026-11-20", 3), ["2026-11-20", "2026-11-23", "2026-11-24"]);
-  assert.deepEqual(businessDays("2026-11-21", 1), ["2026-11-23"], "土曜始まりは月曜から");
+test("営業日:土日と祝日を飛ばして数える", () => {
+  // 2026-11-20 は金曜日。11-23(月)は勤労感謝の日なので、次の営業日は 11-24(火)
+  assert.deepEqual(businessDays("2026-11-20", 3), ["2026-11-20", "2026-11-24", "2026-11-25"]);
+  assert.deepEqual(businessDays("2026-11-21", 1), ["2026-11-24"], "土曜始まりで月曜が祝日なら火曜から");
+  // 2026年のシルバーウィーク(9/19〜9/23)
+  assert.deepEqual(businessDays("2026-09-18", 2), ["2026-09-18", "2026-09-24"]);
 });
 
 const deal = (id, date, extra = {}) => ({ id, title: `案件${id}`, companyId: "c", stage: "提案", amount: 1000000, probability: 50, nextAction: `連絡${id}`, nextActionDate: date, ownerId: "u1", ...extra });

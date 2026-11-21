@@ -297,3 +297,6 @@ details.reasons ul { margin-top: 6px; font-size: .88rem; }
 .load-x { position: absolute; bottom: -30px; font-size: .7rem; color: var(--muted); text-align: center; line-height: 1.2; }
 .load-line { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--muted); z-index: 1; pointer-events: none; }
 .load-line span { position: absolute; right: 0; top: -1.3em; font-size: .7rem; color: var(--muted); font-style: normal; background: var(--surface); padding: 0 4px; }
+
+/* 数字の列は、見出しも右寄せにそろえる */
+th.num { text-align: right; }

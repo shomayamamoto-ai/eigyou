@@ -27,7 +27,7 @@ async function api(url, opts = {}) {
     showAuth("login");
     throw new Error("ログインの有効期限が切れました。もう一度ログインしてください");
   }
-  if (!res.ok) throw new Error(data.error || `エラー(${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `エラー(${res.status})`), { status: res.status, existingId: data.existingId });
   return data;
 }
 
@@ -206,12 +206,25 @@ async function openForm(col, record = {}) {
   dlg.returnValue = "";
   dlg.showModal();
   if (col === "deals") watchDealDate(record);
+  if (col === "companies") watchCompanyName(record);
   return new Promise((resolve) => {
     dlg.onclose = async () => {
       if (dlg.returnValue !== "ok") return resolve(null);
       const body = Object.fromEntries(new FormData($("#dialog-form")));
       try {
-        const saved = await api(record.id ? `/api/${col}/${record.id}` : `/api/${col}`, { method: record.id ? "PUT" : "POST", body });
+        let saved;
+        try {
+          saved = await api(record.id ? `/api/${col}/${record.id}` : `/api/${col}`, { method: record.id ? "PUT" : "POST", body });
+        } catch (err) {
+          // 同じ会社がすでにある:既存の会社を開くか、確認のうえ登録する
+          if (col === "companies" && err.existingId) {
+            if (confirm(`${err.message}\n\n「OK」で既存の会社を開きます。「キャンセル」で、別の会社として登録します。`)) {
+              location.hash = `#company/${err.existingId}`;
+              return resolve(null);
+            }
+            saved = await api("/api/companies", { method: "POST", body: { ...body, allowDuplicate: true } });
+          } else throw err;
+        }
         toast("保存しました");
         resolve(saved);
       } catch (e) {
@@ -586,11 +599,13 @@ async function workloadCardHtml() {
         <div class="load-bar ${d.level}" style="height:${(d.load / max) * 100}%"></div>
         <span class="load-x">${Number(d.date.slice(8))}<br />${d.weekday}</span></div>`).join("")}
     </div>
+    ${w.onDaysOff?.length ? `<p class="verify warn" style="margin-top:28px">休みの日に期限が入っている予定が ${w.onDaysOff.length}件あります(次の営業日に数えています)。<br />${w.onDaysOff.map((t) => `${esc(t.date.slice(5).replace("-", "/"))}(${esc(t.reason)}):${esc(t.nextAction)}`).map((x) => x).join("、")}</p>` : ""}
     ${s.busyDays ? `
       <p style="margin:28px 0 0">予定を詰め込みすぎると、急な用事が1つ入っただけで、後ろの予定がすべて遅れます。<br class="hide-sm" />
         ${s.peak.date.slice(5).replace("-", "/")}(${s.peak.weekday})は ${s.peak.load}件で、稼働率 ${s.peak.utilization}% です。</p>
       ${w.suggestions.length ? `
         <h4>空いている日へずらす案(${w.suggestions.length}件)</h4>
+        <p class="muted" style="margin:0 0 4px">土日・祝日は候補から外しています。</p>
         <p class="muted" style="margin:0 0 6px">見込み金額の小さい予定から、いちばん近い空いている日へ移します。期限切れの予定と、受注予定日を過ぎる移動は対象外です。</p>
         <div class="table-wrap"><table><tbody>${w.suggestions.map((m, i) => `<tr>
           <td><label class="check" style="margin:0"><input type="checkbox" data-move="${i}" checked /></label></td>
@@ -626,6 +641,36 @@ function bindWorkload() {
   );
 }
 
+// 会社名を入力したとき、同じ・似た会社がすでにあれば知らせる(二重登録を防ぐ)
+function watchCompanyName(record) {
+  const input = $("#dialog [name=name]");
+  const site = $("#dialog [name=website]");
+  if (!input) return;
+  const note = document.createElement("div");
+  note.className = "verify warn";
+  note.hidden = true;
+  input.closest("div").append(note);
+  let timer;
+  const check = () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const name = input.value.trim();
+      if (name.length < 2) return (note.hidden = true);
+      try {
+        const params = new URLSearchParams({ name, website: site?.value ?? "", ...(record.id && { exclude: record.id }) });
+        const list = await api(`/api/companies/similar?${params}`);
+        note.hidden = !list.length;
+        note.innerHTML = list.length
+          ? `<b>似た会社がすでに登録されています</b><ul class="clean">${list.map((c) => `<li><a href="#company/${esc(c.id)}" data-close>${esc(c.name)}</a> <span class="muted">(${esc(c.reason)})</span></li>`).join("")}</ul>`
+          : "";
+        note.querySelectorAll("[data-close]").forEach((a) => a.addEventListener("click", () => $("#dialog").close("cancel")));
+      } catch {}
+    }, 300);
+  };
+  input.addEventListener("input", check);
+  site?.addEventListener("change", check);
+}
+
 // 商談の「次アクション期限」を選んだとき、その日が混んでいれば知らせる
 function watchDealDate(record) {
   const input = $("#dialog [name=nextActionDate]");
@@ -645,9 +690,15 @@ function watchDealDate(record) {
     try {
       const params = new URLSearchParams({ date: input.value, owner: owner?.value || "me", ...(record.id && { exclude: record.id }) });
       const r = await api(`/api/workload/check?${params}`);
-      if (!r || r.load + 1 <= r.capacity * 0.8) return;
+      if (!r) return;
+      const msgs = [];
+      if (r.offReason) msgs.push(`${r.date} は${r.offReason}でお休みです。${r.nextBusinessDay ? `次の営業日は ${r.nextBusinessDay} です。` : ""}`);
+      if (r.load !== undefined && r.load + 1 > r.capacity * 0.8) {
+        msgs.push(`${r.offReason ? "その日は" : "この日は"}すでに ${r.load}件の予定があり、追加すると稼働率 ${Math.round(((r.load + 1) / r.capacity) * 100)}% になります(8割超)。` + (r.alternative ? `空いている日:${r.alternative}` : ""));
+      }
+      if (!msgs.length) return;
       note.className = "verify warn";
-      note.textContent = `この日はすでに ${r.load}件の予定があり、追加すると稼働率 ${Math.round(((r.load + 1) / r.capacity) * 100)}% になります(8割超)。` + (r.alternative ? `空いている日:${r.alternative}` : "");
+      note.textContent = msgs.join("");
       note.hidden = false;
     } catch {}
   };
@@ -1223,7 +1274,8 @@ async function renderReport() {
           <div class="chart-tip" id="chart-tip" hidden></div>
         </div>
       </div>
-      ${r.undated.count ? `<p class="muted" style="margin:28px 0 0">このほか、受注予定日が未入力(または6か月より先)の商談が ${r.undated.count}件(総額 ${esc(manYen(r.undated.total))})あります。</p>` : ""}
+      ${r.slipped.count ? `<p class="verify warn" style="margin:28px 0 0">受注予定日を過ぎても進行中の商談が ${r.slipped.count}件(総額 ${esc(manYen(r.slipped.total))})あります。見込みがずれている可能性が高いため、上のグラフには含めていません。予定日を見直すか、受注・失注を登録してください。</p>` : ""}
+      ${r.undated.count ? `<p class="muted" style="margin:${r.slipped.count ? 8 : 28}px 0 0">このほか、受注予定日が未入力(または6か月より先)の商談が ${r.undated.count}件(総額 ${esc(manYen(r.undated.total))})あります。</p>` : ""}
       <details style="margin-top:${r.undated.count ? 8 : 28}px"><summary>表で見る</summary>
         <div class="table-wrap"><table><thead><tr><th>月</th><th class="num">商談数</th><th class="num">総額</th><th class="num">確度加味</th></tr></thead>
         <tbody>${r.forecast.map((f) => `<tr><td>${esc(f.month)}</td><td class="num">${f.count}件</td><td class="num">${yen(f.total)}</td><td class="num">${yen(f.weighted)}</td></tr>`).join("")}</tbody></table></div>
@@ -1248,6 +1300,18 @@ async function renderReport() {
           : `<p class="empty">期限切れ・次のアクション未設定の商談はありません</p>`}
       </section>
     </div>
+
+    <section class="card" style="margin-top:16px">
+      <h3 style="margin-bottom:2px">ステージごとの受注率</h3>
+      <p class="muted" style="margin:0 0 10px">確度が未入力の商談は、この「計算に使う受注率」で見込みを出しています。<br class="hide-sm" />
+        自社の実績(そのステージを通って受注・失注した商談)が増えるほど、標準値から実績に近づきます。実績が少ないうちは、標準値に近い値になります。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>ステージ</th><th class="num">標準値</th><th class="num">自社の実績</th><th class="num">計算に使う受注率</th></tr></thead>
+        <tbody>${r.stageRates.map((x) => `<tr><td>${esc(x.stage)}</td><td class="num">${x.standard}%</td>
+          <td class="num">${x.samples ? `${x.observed}%<br /><span class="muted">${x.samples}件中 ${x.won}件受注</span>` : `<span class="muted">実績なし</span>`}</td>
+          <td class="num"><b>${x.rate}%</b></td></tr>`).join("")}</tbody>
+      </table></div>
+    </section>
 
     <section class="card" style="margin-top:16px">
       <h3>担当者別</h3>
