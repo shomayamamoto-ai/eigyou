@@ -125,7 +125,7 @@ test("リサーチ:実際に開いたページを出典に持たない「事実�
       { text: "属人化の可能性", basis: "推測", sourceUrl: "https://example.co.jp/ir/plan" },
     ],
     recentNews: [
-      { date: "2026-10", title: "新工場を開設", point: "x", sourceUrl: "https://news.example.com/a" },
+      { date: "2026-10", title: "新工場を開設", point: "x", sourceUrl: "https://news.example.com/a?utm_source=x&id=1" }, // 追跡用パラメータの違いは同じページ
       { date: "2026-09", title: "裏づけのないニュース", point: "x", sourceUrl: "https://nowhere.example/x" },
     ],
   }, sources);
