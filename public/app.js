@@ -1188,7 +1188,8 @@ function meetingHtml(m, dealLabel) {
             <tr><td style="white-space:nowrap">${label}</td><td><span class="chip ${bChip[a.bant[k].status]}">${esc(a.bant[k].status)}</span></td>
               <td>${esc(a.bant[k].detail)}
                 ${a.bant[k].quote ? `<blockquote class="quote">「${esc(a.bant[k].quote)}」</blockquote>` : ""}
-                ${a.bant[k].unsupported ? `<span class="muted" style="font-size:.78rem">(AIは「${esc(a.bant[k].originalStatus)}」と判定しましたが、根拠の発言を議事録で確認できませんでした)</span>` : ""}</td></tr>`).join("")}</tbody></table></div>
+                ${a.bant[k].unsupported ? `<span class="muted" style="font-size:.78rem">(AIは「${esc(a.bant[k].originalStatus)}」と判定しましたが、${
+                  { seller: "根拠が営業側の発言だったため、顧客の意思としては数えていません", memo: "根拠が議事録内のメモだったため、顧客の発言としては数えていません" }[a.bant[k].quoteSource] ?? "根拠の発言を議事録で確認できませんでした"})</span>` : ""}</td></tr>`).join("")}</tbody></table></div>
           <h4>顧客の課題</h4>${list(a.customerIssues)}
           <h4>失注リスクの兆候</h4>${list(a.riskSignals)}
         </div>

@@ -8,7 +8,8 @@
     "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env server.js",
     "dev": "node --disable-warning=ExperimentalWarning --watch --env-file-if-exists=.env server.js",
     "admin": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/admin.js",
-    "test": "node --disable-warning=ExperimentalWarning --test"
+    "test": "node --disable-warning=ExperimentalWarning --test",
+    "eval": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/eval.js"
   },
   "engines": {
     "node": ">=22.13"
