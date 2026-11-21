@@ -205,6 +205,7 @@ async function openForm(col, record = {}) {
   const dlg = $("#dialog");
   dlg.returnValue = "";
   dlg.showModal();
+  if (col === "deals") watchDealDate(record);
   return new Promise((resolve) => {
     dlg.onclose = async () => {
       if (dlg.returnValue !== "ok") return resolve(null);
@@ -225,7 +226,7 @@ async function openForm(col, record = {}) {
 // ホーム
 // =====================================================
 async function renderHome() {
-  const d = await api(`/api/dashboard${state.homeMine ? "?mine=1" : ""}`);
+  const [d, workloadHtml] = await Promise.all([api(`/api/dashboard${state.homeMine ? "?mine=1" : ""}`), workloadCardHtml()]);
   const maxCount = Math.max(1, ...d.byStage.map((s) => s.count));
   const qChip = d.quality.score >= 80 ? "ok" : d.quality.score >= 50 ? "warn" : "ng";
   view.innerHTML = `
@@ -245,6 +246,7 @@ async function renderHome() {
     </section>
 
     ${onboardingHtml(d.onboarding)}
+    ${workloadHtml}
 
     ${d.counts.companies === 0 ? `
       <section class="card empty" style="margin-top:16px">
@@ -283,6 +285,7 @@ async function renderHome() {
       </div>
     </section>`;
   view.querySelectorAll("[data-mine]").forEach((b) => b.addEventListener("click", () => { state.homeMine = b.dataset.mine === "1"; renderHome(); }));
+  bindWorkload();
   $("#seed")?.addEventListener("click", (e) =>
     busy(e.currentTarget, "登録中", async () => {
       await api("/api/seed", { method: "POST" });
@@ -418,6 +421,9 @@ async function renderAccount() {
         <h3>基本情報</h3>
         <label>メールアドレス</label><input value="${esc(u.email)}" disabled />
         <label>お名前</label><input id="acc-name" value="${esc(u.name)}" maxlength="100" />
+        <label>1日にこなせる「次のアクション」の件数</label>
+        <input id="acc-capacity" type="number" min="1" max="30" value="${esc(u.dailyCapacity)}" style="max-width:120px" />
+        <span class="muted" style="font-size:.8rem">この件数の8割を超える日を「混んでいる日」として知らせます。</span>
         <label class="check" style="margin-top:12px"><input type="checkbox" id="acc-digest" ${u.digestOptout ? "" : "checked"} />
           <span>平日の朝に「今日やること」メールを受け取る<br /><span class="muted">担当している商談の、期限切れ・本日期限のアクションをお知らせします。</span></span></label>
         <div class="row" style="margin-top:10px"><button class="btn primary" id="acc-save">保存</button></div>
@@ -442,7 +448,8 @@ async function renderAccount() {
     </section>`;
 
   $("#acc-save").addEventListener("click", (e) => busy(e.currentTarget, "保存中", async () => {
-    await api("/api/me", { method: "PUT", body: { name: $("#acc-name").value, digestOptout: !$("#acc-digest").checked } });
+    await api("/api/me", { method: "PUT", body: { name: $("#acc-name").value, digestOptout: !$("#acc-digest").checked, dailyCapacity: $("#acc-capacity").value } });
+    META.user.dailyCapacity = Number($("#acc-capacity").value);
     META.user.name = $("#acc-name").value.trim();
     META.user.digestOptout = !$("#acc-digest").checked;
     $("#user-name").textContent = `${META.user.name}(${META.user.roleLabel})`;
@@ -547,6 +554,106 @@ function setupSearch() {
       input.focus();
     }
   });
+}
+
+// =====================================================
+// 予定の混み具合(待ち行列理論:予定は8割まで)
+// =====================================================
+// 稼働率と待ち時間の関係(窓口1つの待ち行列の基本式:待ち = 稼働率 ÷ (1 − 稼働率))
+const WAIT_TABLE = [[0.5, 1], [0.8, 4], [0.9, 9], [0.95, 19]];
+
+async function workloadCardHtml() {
+  let w;
+  try {
+    w = await api("/api/workload?owner=me");
+  } catch {
+    return "";
+  }
+  if (!w.summary.taskCount) return "";
+  const s = w.summary;
+  const max = Math.max(w.capacity, ...w.days.map((d) => d.load));
+  const levelText = { ok: "余裕あり", busy: "8割超", over: "こなせる量を超過" };
+  state.workload = w;
+  return `<section class="card" id="workload" style="margin-top:16px">
+    <div class="row between">
+      <div><h3 style="margin:0">予定の混み具合(今後10営業日)</h3>
+        <span class="muted">1日にこなせる量:${w.capacity}件(<a href="#account">変更</a>)/ 8割の目安:${w.targetLoad}件まで</span></div>
+      ${s.busyDays ? `<span class="chip ${s.overDays ? "ng" : "warn"}">8割を超える日:${s.busyDays}日</span>` : `<span class="chip ok">すべての日が8割以内</span>`}
+    </div>
+    <div class="load-chart" role="img" aria-label="日ごとの予定件数。詳細は下の表にあります。">
+      <i class="load-line" style="bottom:${(w.capacity * w.targetUtilization / max) * 100}%"><span>8割</span></i>
+      ${w.days.map((d) => `<div class="load-col" title="${esc(d.date)}(${d.weekday}):${d.load}件・稼働率${d.utilization}%${d.waitFactor === null ? "・こなせる量を超過" : `・待ちの目安:処理時間の${d.waitFactor}倍`}">
+        <div class="load-bar ${d.level}" style="height:${(d.load / max) * 100}%"></div>
+        <span class="load-x">${Number(d.date.slice(8))}<br />${d.weekday}</span></div>`).join("")}
+    </div>
+    ${s.busyDays ? `
+      <p style="margin:28px 0 0">予定を詰め込みすぎると、急な用事が1つ入っただけで、後ろの予定がすべて遅れます。<br class="hide-sm" />
+        ${s.peak.date.slice(5).replace("-", "/")}(${s.peak.weekday})は ${s.peak.load}件で、稼働率 ${s.peak.utilization}% です。</p>
+      ${w.suggestions.length ? `
+        <h4>空いている日へずらす案(${w.suggestions.length}件)</h4>
+        <p class="muted" style="margin:0 0 6px">見込み金額の小さい予定から、いちばん近い空いている日へ移します。期限切れの予定と、受注予定日を過ぎる移動は対象外です。</p>
+        <div class="table-wrap"><table><tbody>${w.suggestions.map((m, i) => `<tr>
+          <td><label class="check" style="margin:0"><input type="checkbox" data-move="${i}" checked /></label></td>
+          <td><b>${esc(m.nextAction)}</b><br />${coLink(m.companyId, m.companyName)}|${esc(m.title)}</td>
+          <td style="white-space:nowrap">${esc(m.from.slice(5).replace("-", "/"))} → <b>${esc(m.to.slice(5).replace("-", "/"))}</b>${m.earlier ? `<br /><span class="muted">前倒し</span>` : ""}</td></tr>`).join("")}</tbody></table></div>
+        <div class="row" style="margin-top:8px"><button class="btn primary small" id="apply-moves">選んだ予定をずらす</button>
+          ${s.remainingBusyDays ? `<span class="muted">ずらしても ${s.remainingBusyDays}日は8割を超えます。予定そのものを減らすか、ほかのメンバーへの割り振りを検討してください。</span>` : ""}</div>`
+      : `<p class="muted">10営業日の中に空いている日がないため、ずらす案を作れませんでした。予定を減らすか、ほかのメンバーへの割り振りを検討してください。</p>`}`
+    : `<p class="muted" style="margin:28px 0 0">どの日も8割以内に収まっていて、急な用事にも対応できる状態です。</p>`}
+    <details style="margin-top:12px"><summary>なぜ「8割まで」なのか</summary>
+      <p style="margin:8px 0 6px">レジの行列と同じで、用事はばらばらに入ってくるため、平均では空いている時間があっても、重なった時点で行列(遅れ)ができます。
+        待ち行列理論の基本式では、詰め込み具合(稼働率)と待ち時間は次の関係になります。</p>
+      <div class="table-wrap"><table><thead><tr><th>稼働率</th><th>手をつけるまでの待ち(1件にかかる時間の何倍か)</th></tr></thead>
+        <tbody>${WAIT_TABLE.map(([u, f]) => `<tr><td>${Math.round(u * 100)}%</td><td>${f}倍</td></tr>`).join("")}</tbody></table></div>
+      <p class="muted" style="margin:6px 0 0">8割を超えると、待ち時間が急に増えます。この表は「用事がばらばらに入り、かかる時間もばらつく」という単純な前提の計算で、実際の遅れを正確に予測するものではありません。詰め込みすぎに気づくための目安です。</p>
+    </details>
+    <details style="margin-top:6px"><summary>日ごとの件数を表で見る</summary>
+      <div class="table-wrap"><table><thead><tr><th>日付</th><th class="num">件数</th><th class="num">稼働率</th><th>状態</th></tr></thead>
+        <tbody>${w.days.map((d) => `<tr><td>${esc(d.date)}(${d.weekday})</td><td class="num">${d.load}件</td><td class="num">${d.utilization}%</td><td>${levelText[d.level]}</td></tr>`).join("")}</tbody></table></div>
+    </details>
+  </section>`;
+}
+
+function bindWorkload() {
+  $("#apply-moves")?.addEventListener("click", (e) =>
+    busy(e.currentTarget, "反映中", async () => {
+      const moves = [...view.querySelectorAll("[data-move]:checked")].map((c) => state.workload.suggestions[Number(c.dataset.move)]).map((m) => ({ dealId: m.dealId, to: m.to }));
+      if (!moves.length) return toast("ずらす予定を選んでください", true);
+      const r = await api("/api/workload/apply", { method: "POST", body: { moves } });
+      toast(`${r.applied}件の予定をずらしました`);
+      renderHome();
+    }),
+  );
+}
+
+// 商談の「次アクション期限」を選んだとき、その日が混んでいれば知らせる
+function watchDealDate(record) {
+  const input = $("#dialog [name=nextActionDate]");
+  const owner = $("#dialog [name=ownerId]");
+  if (!input) return;
+  let note = $("#date-load-note");
+  if (!note) {
+    note = document.createElement("p");
+    note.id = "date-load-note";
+    note.className = "verify";
+    note.hidden = true;
+    input.closest("div").append(note);
+  }
+  const check = async () => {
+    note.hidden = true;
+    if (!input.value) return;
+    try {
+      const params = new URLSearchParams({ date: input.value, owner: owner?.value || "me", ...(record.id && { exclude: record.id }) });
+      const r = await api(`/api/workload/check?${params}`);
+      if (!r || r.load + 1 <= r.capacity * 0.8) return;
+      note.className = "verify warn";
+      note.textContent = `この日はすでに ${r.load}件の予定があり、追加すると稼働率 ${Math.round(((r.load + 1) / r.capacity) * 100)}% になります(8割超)。` + (r.alternative ? `空いている日:${r.alternative}` : "");
+      note.hidden = false;
+    } catch {}
+  };
+  input.addEventListener("change", check);
+  owner?.addEventListener("change", check);
+  check();
 }
 
 // =====================================================
@@ -1145,9 +1252,9 @@ async function renderReport() {
     <section class="card" style="margin-top:16px">
       <h3>担当者別</h3>
       <div class="table-wrap"><table>
-        <thead><tr><th>担当者</th><th class="num">進行中</th><th class="num">総額</th><th class="num">確度加味</th><th class="num">期限切れ</th><th class="num">次アクション未設定</th><th class="num">受注額</th></tr></thead>
+        <thead><tr><th>担当者</th><th class="num">進行中</th><th class="num">総額</th><th class="num">確度加味</th><th class="num">期限切れ</th><th class="num">次アクション未設定</th><th class="num">8割超の日<br /><span class="muted" style="font-weight:400">今後10営業日</span></th><th class="num">受注額</th></tr></thead>
         <tbody>${r.byOwner.map((o) => `<tr><td><b>${esc(o.name)}</b></td><td class="num">${o.open}件</td><td class="num">${yen(o.pipeline)}</td><td class="num">${yen(o.weighted)}</td>
-          <td class="num">${o.overdue ? `<span class="overdue">${o.overdue}件</span>` : "0件"}</td><td class="num">${o.noNextAction ? `<span class="overdue">${o.noNextAction}件</span>` : "0件"}</td><td class="num">${yen(o.wonAmount)}</td></tr>`).join("")}</tbody>
+          <td class="num">${o.overdue ? `<span class="overdue">${o.overdue}件</span>` : "0件"}</td><td class="num">${o.noNextAction ? `<span class="overdue">${o.noNextAction}件</span>` : "0件"}</td><td class="num">${o.busyDays === null ? "—" : o.busyDays ? `<span class="overdue">${o.busyDays}日</span>` : "0日"}</td><td class="num">${yen(o.wonAmount)}</td></tr>`).join("")}</tbody>
       </table></div>
     </section>`;
 

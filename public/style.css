@@ -287,3 +287,13 @@ a.src { font-size: .75rem; background: #e3f3ea; color: var(--ok); border-radius:
 a.src:hover { text-decoration: underline; }
 details.reasons { margin-top: 10px; }
 details.reasons ul { margin-top: 6px; font-size: .88rem; }
+
+/* ---------- 予定の混み具合 ---------- */
+.load-chart { position: relative; display: flex; gap: 4px; height: 120px; margin: 14px 0 12px; border-bottom: 1px solid var(--border); }
+.load-col { flex: 1; position: relative; display: flex; align-items: flex-end; justify-content: center; min-width: 0; }
+.load-bar { width: min(22px, 70%); border-radius: 4px 4px 0 0; background: var(--accent); opacity: .55; }
+.load-bar.busy { opacity: 1; }
+.load-bar.over { opacity: 1; background: var(--ng); }
+.load-x { position: absolute; bottom: -30px; font-size: .7rem; color: var(--muted); text-align: center; line-height: 1.2; }
+.load-line { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--muted); z-index: 1; pointer-events: none; }
+.load-line span { position: absolute; right: 0; top: -1.3em; font-size: .7rem; color: var(--muted); font-style: normal; background: var(--surface); padding: 0 4px; }

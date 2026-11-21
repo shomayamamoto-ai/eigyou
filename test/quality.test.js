@@ -208,3 +208,23 @@ test("レポート:見込額・受注率・担当者別を集計する", async (
   assert.ok(r.data.attention.every((a) => a.reason));
   assert.equal((await fresh("GET", "/api/reports")).status, 401);
 });
+
+test("予定の混み具合:API・ずらす案の反映・1日の件数の設定", async () => {
+  const r = await owner("PUT", "/api/me", { dailyCapacity: 0 });
+  assert.equal(r.status, 400);
+  assert.equal((await owner("PUT", "/api/me", { dailyCapacity: 3 })).status, 200);
+  const w = await owner("GET", "/api/workload?owner=me");
+  assert.equal(w.status, 200, JSON.stringify(w.data));
+  assert.equal(w.data.capacity, 3);
+  assert.equal(w.data.days.length, 10);
+  assert.equal((await owner("GET", "/api/workload?owner=someone-else")).status, 404);
+  if (w.data.suggestions.length) {
+    const m = w.data.suggestions[0];
+    const ap = await owner("POST", "/api/workload/apply", { moves: [{ dealId: m.dealId, to: m.to }, { dealId: m.dealId, to: "2000-01-01" }] });
+    assert.equal(ap.data.applied, 1, "過去の日付へは動かさない");
+    const d = (await owner("GET", "/api/deals")).data.find((x) => x.id === m.dealId);
+    assert.equal(d.nextActionDate, m.to);
+  }
+  const rep = await owner("GET", "/api/reports");
+  assert.ok(rep.data.byOwner.every((o) => o.id === null || typeof o.busyDays === "number"));
+});
