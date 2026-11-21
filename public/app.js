@@ -334,6 +334,7 @@ async function renderCompany(id) {
         </div>
         <div style="text-align:right"><div class="muted">優先度</div><b style="font-size:1.5rem;color:var(--accent)">${d.score}</b></div>
       </div>
+      ${scoreReasonsHtml(d)}
       ${c.notes ? `<p class="pre" style="margin:12px 0 0">${esc(c.notes)}</p>` : ""}
       <div class="row" style="margin-top:12px">
         <button class="btn small ghost" id="edit-co">会社情報を編集</button>
@@ -600,14 +601,30 @@ async function renderResearch() {
   });
 }
 
+// 出典へのリンク(http・https のみ)
+const srcLink = (url) => (/^https?:\/\//i.test(url ?? "") ? `<a class="src" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="${esc(url)}">出典</a>` : "");
+
+// AIの出力を点検した結果のまとめ
+function verificationHtml(r) {
+  const v = r.verification;
+  if (!v) return "";
+  const parts = [];
+  if (v.factsVerified) parts.push(`「事実」${v.factsVerified}件を出典と照合しました`);
+  if (v.factsDowngraded) parts.push(`${v.factsDowngraded}件は出典を確認できず、「推測」に変更しました`);
+  if (v.newsUnverified) parts.push(`ニュース${v.newsUnverified}件は出典を確認できていません`);
+  if (!parts.length) return "";
+  return `<p class="verify ${v.factsDowngraded || v.newsUnverified ? "warn" : ""}"><b>点検結果:</b>${parts.map(esc).join("。")}。</p>`;
+}
+
 function researchHtml(r) {
   return `
     ${r.demo ? `<p class="notice" style="margin-top:12px">デモモードの結果です(架空のサンプル)。<br />運営者がAIのAPIキーを設定すると、実際の調査結果になります。</p>` : ""}
+    ${verificationHtml(r)}
     <h4>概要</h4><p style="margin:0">${esc(r.summary)}</p>
-    <p class="muted" style="margin:6px 0 0">規模感:${esc(r.scale)}</p>
+    <p class="muted" style="margin:6px 0 0">規模感:${esc(r.scale)}${r.scaleVerified ? ` ${srcLink(r.scaleSourceUrl)}` : r.verification ? ` <span class="chip warn">出典未確認</span>` : ""}</p>
     <h4>主な事業</h4>${list(r.business)}
-    <h4>最近の動き</h4>${list(r.recentNews, (n) => `<b>${esc(n.date)}</b> ${esc(n.title)}<br /><span class="muted">→ ${esc(n.point)}</span>`)}
-    <h4>想定される課題</h4>${list(r.challenges, (c) => `${esc(c.text)} <span class="chip ${c.basis === "事実" ? "ok" : "warn"}">${esc(c.basis)}</span>`)}
+    <h4>最近の動き</h4>${list(r.recentNews, (n) => `<b>${esc(n.date)}</b> ${esc(n.title)} ${n.verified ? srcLink(n.sourceUrl) : r.verification ? `<span class="chip warn">出典未確認</span>` : ""}<br /><span class="muted">→ ${esc(n.point)}</span>`)}
+    <h4>想定される課題</h4>${list(r.challenges, (c) => `${esc(c.text)} <span class="chip ${c.basis === "事実" ? "ok" : "warn"}">${esc(c.basis)}</span>${c.verified ? ` ${srcLink(c.sourceUrl)}` : ""}${c.downgraded ? ` <span class="muted" style="font-size:.78rem">(出典を確認できなかったため、推測として表示)</span>` : ""}`)}
     <h4>提案の切り口</h4>${list(r.opportunities)}
     <h4>初回商談で聞くこと</h4>${list(r.keyQuestions)}
     ${r.sources?.length ? `<h4>出典</h4>${list(r.sources.slice(0, 12), (s) => (/^https?:\/\//i.test(s.url) ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title)}</a>` : esc(s.title)))}` : ""}
@@ -655,6 +672,7 @@ async function renderEnterprise() {
             : `<button class="btn primary" id="run">${p ? "作り直す" : "開拓プランを作成"}</button>`}
         </div>
       </div>
+      ${scoreReasonsHtml(cur)}
       ${p ? planHtml(p) : ""}
     </section>` : ""}`;
 
@@ -669,6 +687,13 @@ async function renderEnterprise() {
     renderEnterprise();
   });
   if (p) bindEmailEditor(view, `/api/companies/${cur.id}/plan-email`);
+}
+
+// 優先度の内訳(なぜこの点数なのか)
+function scoreReasonsHtml(x) {
+  if (!x?.scoreReasons?.length) return "";
+  return `<details class="reasons"><summary>優先度 ${x.score}点の内訳</summary>
+    <ul class="clean">${x.scoreReasons.map((r) => `<li>${esc(r.label)} <b class="${r.points < 0 ? "overdue" : ""}">${r.points > 0 ? "+" : ""}${r.points}</b></li>`).join("")}</ul></details>`;
 }
 
 function planHtml(p) {
@@ -736,7 +761,7 @@ async function renderCrm() {
           ${q.issues.length ? q.issues.map((i, n) => `
             <div class="issue">
               <div><span class="chip ${sevChip[i.severity][0]}">${sevChip[i.severity][1]}</span> ${esc(i.message)}</div>
-              ${i.fix ? `<button class="btn small primary" data-fix="${n}">${i.fix === "merge" ? "統合" : "修正"}</button>` : ""}
+              ${i.fix ? `<button class="btn small ${i.needsReview ? "ghost" : "primary"}" data-fix="${n}">${i.fix.startsWith("merge") ? (i.needsReview ? "確認して統合" : "統合") : "修正"}</button>` : ""}
             </div>`).join("") : `<p class="empty">問題は見つかりませんでした</p>`}
         </div>
       </section>
@@ -788,11 +813,16 @@ async function renderCrm() {
   });
   if (board) bindBoard(() => renderCrm());
   view.querySelectorAll("[data-fix]").forEach((b) =>
-    b.addEventListener("click", () => busy(b, "", async () => {
-      await api("/api/crm/fix", { method: "POST", body: q.issues[Number(b.dataset.fix)] });
-      toast("修正しました");
-      renderCrm();
-    })),
+    b.addEventListener("click", () => {
+      const issue = q.issues[Number(b.dataset.fix)];
+      // 「同じ会社かもしれない」ものは、人が確認してから統合する
+      if (issue.needsReview && !confirm(`${issue.message}\n\nこの2社を1つに統合しますか?\n(担当者・商談は、先に登録された会社にまとめられます。元に戻せません)`)) return;
+      busy(b, "", async () => {
+        await api("/api/crm/fix", { method: "POST", body: { fix: issue.fix, ids: issue.ids } });
+        toast("修正しました");
+        renderCrm();
+      });
+    }),
   );
   view.querySelectorAll("[data-edit]").forEach((b) =>
     b.addEventListener("click", async () => {
@@ -820,8 +850,9 @@ async function renderCrm() {
     const file = e.target.files[0];
     if (!file) return;
     try {
-      const r = await api(`/api/import/${tab}`, { method: "POST", body: { csv: await file.text() } });
-      toast(`取り込み完了:会社${r.companies}件・担当者${r.contacts}件・商談${r.deals}件`);
+      const r = await api(`/api/import/${tab}`, { method: "POST", body: { csv: await readCsvFile(file) } });
+      const skipped = r.unmatched?.length ? `(読み取らなかった列:${r.unmatched.join("、")})` : "";
+      toast(`取り込み完了:会社${r.companies}件・担当者${r.contacts}件・商談${r.deals}件${skipped}`);
       renderCrm();
     } catch (err) {
       toast(err.message, true);
@@ -883,12 +914,24 @@ function bindBoard(rerender) {
   });
 }
 
+// CSVファイルを読む。Excelで保存したCSVは Shift_JIS のことが多いので、
+// まず UTF-8 として厳密に読み、だめなら Shift_JIS として読み直す(文字化けを防ぐ)
+async function readCsvFile(file) {
+  const buf = await file.arrayBuffer();
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buf);
+  } catch {
+    return new TextDecoder("shift_jis").decode(buf);
+  }
+}
+
 function showExtract(r) {
   const box = $("#ext-result");
   const total = r.companies.length + r.contacts.length + r.deals.length;
   box.innerHTML = `
     <h4>読み取り結果(確認してから登録)</h4>
     ${r.demo ? `<p class="notice">デモモード:メール・電話・会社名らしき行だけを機械的に拾っています。</p>` : ""}
+    ${r.verification?.removed?.length ? `<p class="verify warn"><b>点検結果:</b>元の文面で確認できなかった次の項目は、取り除きました。<br />${r.verification.removed.map(esc).join("、")}</p>` : ""}
     ${r.companies.length ? `<p style="margin:4px 0"><b>会社</b></p>${list(r.companies, (c) => `${esc(c.name)} <span class="muted">${esc(c.industry)} ${esc(c.tier)}</span>`)}` : ""}
     ${r.contacts.length ? `<p style="margin:8px 0 4px"><b>担当者</b></p>${list(r.contacts, (p) => `${esc(p.name)}(${esc(p.companyName)} ${esc(p.department)} ${esc(p.title)})<br /><span class="muted">${esc(p.email)} ${esc(p.phone)} / ${esc(p.role)}</span>`)}` : ""}
     ${r.deals.length ? `<p style="margin:8px 0 4px"><b>商談</b></p>${list(r.deals, (d) => `${esc(d.title)}(${esc(d.companyName)}) ${stageChip(d.stage)} ${yen(d.amount)}`)}` : ""}
@@ -977,12 +1020,17 @@ function meetingHtml(m, dealLabel) {
       ${a.demo ? `<p class="notice">デモモードの結果です(架空のサンプル)。</p>` : ""}
       <h4>要約</h4><p style="margin:0">${esc(a.summary)}</p>
       <p class="muted" style="margin:6px 0 0">確度の根拠:${esc(a.probabilityReason)}</p>
+      ${a.verification?.notes?.length ? `<div class="verify warn"><b>点検結果:</b><ul class="clean">${a.verification.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul></div>`
+        : a.verification?.checked ? `<p class="verify"><b>点検結果:</b>BANTの根拠となる発言を、議事録の中で確認しました。</p>` : ""}
 
       <div class="grid grid-2" style="margin-top:4px">
         <div>
           <h4>BANT</h4>
           <div class="table-wrap"><table><tbody>${Object.entries(bantLabel).map(([k, label]) => `
-            <tr><td style="white-space:nowrap">${label}</td><td><span class="chip ${bChip[a.bant[k].status]}">${esc(a.bant[k].status)}</span></td><td>${esc(a.bant[k].detail)}</td></tr>`).join("")}</tbody></table></div>
+            <tr><td style="white-space:nowrap">${label}</td><td><span class="chip ${bChip[a.bant[k].status]}">${esc(a.bant[k].status)}</span></td>
+              <td>${esc(a.bant[k].detail)}
+                ${a.bant[k].quote ? `<blockquote class="quote">「${esc(a.bant[k].quote)}」</blockquote>` : ""}
+                ${a.bant[k].unsupported ? `<span class="muted" style="font-size:.78rem">(AIは「${esc(a.bant[k].originalStatus)}」と判定しましたが、根拠の発言を議事録で確認できませんでした)</span>` : ""}</td></tr>`).join("")}</tbody></table></div>
           <h4>顧客の課題</h4>${list(a.customerIssues)}
           <h4>失注リスクの兆候</h4>${list(a.riskSignals)}
         </div>
@@ -998,7 +1046,7 @@ function meetingHtml(m, dealLabel) {
       <h4>CRMへの反映内容</h4>
       <div class="pre">ステージ:${esc(u.stage)}
 確度:${Math.round(a.winProbability)}%
-金額:${u.amount ? yen(u.amount) : "変更なし"}
+金額:${u.amount ? (u.amountVerified === false ? `変更なし(${yen(u.amount)} は議事録で確認できず)` : yen(u.amount)) : "変更なし"}
 次アクション:${esc(u.nextAction)}(${esc(u.nextActionDate || "期限なし")})</div>
       <div class="row" style="margin-top:8px">
         ${m.dealId ? `<button class="btn primary" id="apply" ${m.applied ? "disabled" : ""}>${m.applied ? "CRMに反映済み" : "CRMに反映する"}</button>` : `<span class="muted">商談にひもづけると、CRMへ反映できます。</span>`}
@@ -1054,7 +1102,7 @@ async function renderReport() {
 
     <section class="card" style="margin-top:16px">
       <h3 style="margin-bottom:2px">月別の受注見込み(確度を加味した金額)</h3>
-      <p class="muted" style="margin:0 0 12px">受注予定日が入っている進行中の商談を、「金額 × 確度」で月ごとに合計しています。</p>
+      <p class="muted" style="margin:0 0 12px">受注予定日が入っている進行中の商談を、「金額 × 確度」で月ごとに合計しています。${s.noProbabilityCount ? `<br class="hide-sm" />確度が未入力の${s.noProbabilityCount}件は、ステージごとの標準の確度(提案50%・交渉70% など)で計算しています。` : ""}</p>
       <div class="chart" id="forecast-chart" role="img" aria-label="月別の受注見込みの棒グラフ。詳しい数値は下の表にあります。">
         <div class="y-axis">${[1, 0.5, 0].map((t) => `<span>${t === 0 ? "0" : manYen(niceMax * t)}</span>`).join("")}</div>
         <div class="plot">

@@ -115,7 +115,7 @@ test("CSV取り込み:想定外の値は安全な値に直し、重複した会�
   const d1 = deals.find((d) => d.title === "案件1");
   assert.equal(d1.stage, "リード");
   assert.equal(d1.amount, null);
-  assert.equal(d1.nextActionDate, "");
+  assert.equal(d1.nextActionDate, "2026-01-01", "スラッシュ区切りの日付も読み取る");
   const d2 = deals.find((d) => d.title === "案件2");
   assert.equal(d2.stage, "交渉");
   assert.equal(d1.companyId, d2.companyId, "表記ゆれは同じ会社にまとめる");
