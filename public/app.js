@@ -1304,6 +1304,25 @@ async function renderReport() {
     </div>
 
     <section class="card" style="margin-top:16px">
+      <h3 style="margin-bottom:2px">予測の当たり具合</h3>
+      <p class="muted" style="margin:0 0 10px">毎月はじめに、その月と翌月の見込額を自動で記録しています。月が終わったあと、実際の受注額と比べます。<br class="hide-sm" />
+        予測がいつも多すぎる(楽観的)、または少なすぎる(悲観的)くせがあれば、確度の付け方を見直す目安になります。</p>
+      ${r.accuracy.months.length ? `
+        ${r.accuracy.bias !== null ? `<p style="margin:0 0 8px"><b>平均すると、予測は実績より ${Math.abs(r.accuracy.bias)}% ${r.accuracy.bias > 0 ? "多め(楽観的)" : r.accuracy.bias < 0 ? "少なめ(悲観的)" : "ちょうど"}</b>
+          <span class="muted">(${r.accuracy.sampleMonths}か月分・ずれの大きさの平均 ${r.accuracy.meanAbsError}%)</span></p>` : ""}
+        <div class="table-wrap"><table>
+          <thead><tr><th>月</th><th class="num">前月はじめの予測</th><th class="num">当月はじめの予測</th><th class="num">実際の受注額</th><th class="num">ずれ</th></tr></thead>
+          <tbody>${r.accuracy.months.map((m) => `<tr><td>${esc(m.month)}</td>
+            <td class="num">${m.monthBefore ? yen(m.monthBefore.weighted) : "—"}</td>
+            <td class="num">${m.sameMonth ? yen(m.sameMonth.weighted) : "—"}</td>
+            <td class="num">${yen(m.actual.total)}<br /><span class="muted">${m.actual.count}件</span></td>
+            <td class="num">${m.errorRate === null ? "—" : `${m.errorRate > 0 ? "+" : ""}${m.errorRate}%`}</td></tr>`).join("")}</tbody>
+        </table></div>
+        <p class="muted" style="margin:6px 0 0">ずれ =(予測 − 実績)÷ 実績。実績が0円の月は計算しません。</p>`
+        : `<p class="empty">記録が始まったばかりです。月が終わるごとに、ここに予測と実績の比較が表示されます。</p>`}
+    </section>
+
+    <section class="card" style="margin-top:16px">
       <h3 style="margin-bottom:2px">ステージごとの受注率</h3>
       <p class="muted" style="margin:0 0 10px">確度が未入力の商談は、この「計算に使う受注率」で見込みを出しています。<br class="hide-sm" />
         自社の実績(そのステージを通って受注・失注した商談)が増えるほど、標準値から実績に近づきます。実績が少ないうちは、標準値に近い値になります。</p>
