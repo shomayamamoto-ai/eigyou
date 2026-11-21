@@ -157,7 +157,9 @@ test("HubSpot:接続→取り込み→商談分析をCRMに反映すると書き
   assert.equal(ap.data.pushed?.ok, true, JSON.stringify(ap.data.pushed));
   const patch = calls.find((c) => c.method === "PATCH");
   assert.match(patch.url, /\/crm\/v3\/objects\/deals\/d1$/);
-  assert.equal(JSON.parse(patch.body).properties.dealstage, "qualifiedtobuy"); // デモ結果のステージ「ヒアリング」
+  // 分析の提案は「ヒアリング」だが、ステージは後戻りさせないので「提案」のまま書き戻す
+  assert.equal(JSON.parse(patch.body).properties.dealstage, "presentationscheduled");
+  assert.equal(ap.data.stageKept.kept, "提案");
 });
 
 test("Salesforce:URLは salesforce.com ドメインのみ・取り込みできる", async () => {

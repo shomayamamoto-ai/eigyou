@@ -1223,6 +1223,7 @@ function bindMeetingActions(m) {
       const r = await api(`/api/meetings/${m.id}/apply`, { method: "POST" });
       if (r.pushed?.ok) toast(`CRMを更新し、${r.pushed.provider}にも反映しました`);
       else if (r.pushed) toast(`CRMは更新しましたが、${r.pushed.provider}への反映に失敗しました:${r.pushed.error}`, true);
+      else if (r.stageKept) toast(`CRMを更新しました。ステージは後戻りさせず「${r.stageKept.kept}」のままにしています(分析の提案は「${r.stageKept.suggested}」)`);
       else toast("CRMの商談情報を更新しました");
       renderMeeting();
     }),
