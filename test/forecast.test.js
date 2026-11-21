@@ -53,3 +53,31 @@ test("当たり具合:月はじめの予測を保存し、月が終わったら�
   // 今月(12月)はまだ終わっていないので、比べない
   assert.ok(!acc.months.some((m) => m.month === "2026-12"));
 });
+
+import { probabilityCalibration } from "../lib/forecast.js";
+
+test("受注・失注になったとき、直前の確度を記録する", () => {
+  const db = new Database(":memory:");
+  const s = db.forTenant(db.createTenant({ name: "t" }).id);
+  const d = s.insert("deals", { companyId: "c", title: "a", stage: "交渉", probability: 70 });
+  // 商談分析の反映のように、確度とステージを同時に変えても「変える前」の確度を記録する
+  const after = s.update("deals", d.id, { stage: "受注", probability: 100 });
+  assert.equal(after.closedFromProbability, 70);
+  const n = s.insert("deals", { companyId: "c", title: "b", stage: "提案", probability: null });
+  assert.equal(s.update("deals", n.id, { stage: "失注" }).closedFromProbability, undefined, "確度が未入力なら記録しない");
+});
+
+test("確度の当たり具合:確度ごとの実際の受注率・ブライアスコア・偏り", () => {
+  const mk = (p, won) => ({ stage: won ? "受注" : "失注", closedFromProbability: p });
+  const deals = [mk(80, true), mk(80, true), mk(80, false), mk(90, false), mk(30, false), mk(30, true), { stage: "提案", closedFromProbability: 50 }];
+  const c = probabilityCalibration(deals);
+  assert.equal(c.count, 6, "進行中の商談は数えない");
+  const hi = c.buckets.find((b) => b.range === "80〜100%");
+  assert.deepEqual([hi.count, hi.avgProbability, hi.actualWinRate], [4, 83, 50]);
+  const lo = c.buckets.find((b) => b.range === "20〜40%");
+  assert.deepEqual([lo.count, lo.actualWinRate], [2, 50]);
+  // ブライア:((0.2²+0.2²+0.8²+0.9²+0.3²+0.7²)/6) = (0.04+0.04+0.64+0.81+0.09+0.49)/6 = 0.352
+  assert.equal(c.brier, 0.352);
+  // 偏り:付けた確度の平均 65 − 実際の受注率 50 = +15(楽観的)
+  assert.equal(c.bias, 15);
+});

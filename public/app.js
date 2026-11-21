@@ -1323,6 +1323,27 @@ async function renderReport() {
     </section>
 
     <section class="card" style="margin-top:16px">
+      <h3 style="margin-bottom:2px">確度の当たり具合</h3>
+      <p class="muted" style="margin:0 0 10px">受注・失注した商談について、直前に付いていた確度と、実際の結果を比べています。<br class="hide-sm" />
+        「70%と付けた商談が、本当に7割ほど受注できているか」を確かめるものです(天気予報の降水確率と同じ考え方)。</p>
+      ${r.calibration.count ? `
+        <p style="margin:0 0 8px"><b>${r.calibration.bias > 5 ? `付けた確度は、実際の受注率より平均 ${r.calibration.bias}ポイント高め(楽観的)です` : r.calibration.bias < -5 ? `付けた確度は、実際の受注率より平均 ${-r.calibration.bias}ポイント低め(慎重)です` : "付けた確度と、実際の受注率はおおむね合っています"}</b>
+          <span class="muted">(${r.calibration.count}件・ブライアスコア ${r.calibration.brier}:0に近いほど正確、いつも50%と付けた場合は0.25)</span></p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>付けた確度</th><th class="num">件数</th><th class="num">付けた確度の平均</th><th class="num">実際の受注率</th></tr></thead>
+          <tbody>${r.calibration.buckets.map((b) => `<tr><td>${esc(b.range)}</td><td class="num">${b.count}件</td>
+            <td class="num">${b.avgProbability === null ? "—" : `${b.avgProbability}%`}</td>
+            <td class="num">${b.actualWinRate === null ? "—" : `<b>${b.actualWinRate}%</b>`}</td></tr>`).join("")}</tbody>
+        </table></div>
+        ${r.calibration.people.length ? `<h4>担当者別の傾向(実績3件以上)</h4>
+          <div class="table-wrap"><table><thead><tr><th>担当者</th><th class="num">件数</th><th class="num">付けた確度の平均</th><th class="num">実際の受注率</th><th class="num">差</th></tr></thead>
+          <tbody>${r.calibration.people.map((x) => `<tr><td>${esc(x.name)}</td><td class="num">${x.count}件</td><td class="num">${x.avgProbability}%</td><td class="num">${x.actualWinRate}%</td>
+            <td class="num">${x.bias > 0 ? "+" : ""}${x.bias}</td></tr>`).join("")}</tbody></table></div>` : ""}
+        <p class="muted" style="margin:6px 0 0">件数が少ないうちは、偶然の影響が大きくなります。20件ほどたまってから傾向を判断してください。</p>`
+        : `<p class="empty">まだ記録がありません。確度を付けた商談が受注・失注になると、ここに表示されます。</p>`}
+    </section>
+
+    <section class="card" style="margin-top:16px">
       <h3 style="margin-bottom:2px">ステージごとの受注率</h3>
       <p class="muted" style="margin:0 0 10px">確度が未入力の商談は、この「計算に使う受注率」で見込みを出しています。<br class="hide-sm" />
         自社の実績(そのステージを通って受注・失注した商談)が増えるほど、標準値から実績に近づきます。実績が少ないうちは、標準値に近い値になります。</p>
